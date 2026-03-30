@@ -1,0 +1,5 @@
+{
+  "name": "सAAहस",
+  "description": "Your Silence Has a Voice - A personal safety companion for your walks.",
+  "requestFramePermissions": ["geolocation", "screen-wake-lock"]
+}

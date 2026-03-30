@@ -1,0 +1,56 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Teko:wght@500;600;700&family=Rajdhani:wght@500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&family=Manrope:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Teko", sans-serif;
+  --font-hindi: "Rajdhani", sans-serif;
+  --font-headline: "Space Grotesk", sans-serif;
+  --font-body: "Manrope", sans-serif;
+
+  --color-primary: #ff8f78;
+  --color-tertiary: #ff9f4a;
+  --color-background: #070d1f;
+  --color-surface-low: #0c1326;
+  --color-surface-high: #171f36;
+  --color-surface-highest: #1c253e;
+  --color-on-surface: #dfe4fe;
+  --color-on-surface-variant: #a5aac2;
+  --color-outline-variant: #41475b;
+  --color-on-primary: #610a00;
+
+  @keyframes shimmer {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(100%); }
+  }
+  --animate-shimmer: shimmer 2s infinite;
+
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    50% { transform: translateX(5px); }
+    75% { transform: translateX(-5px); }
+  }
+  --animate-shake: shake 0.2s ease-in-out 0s 2;
+
+  @keyframes pulse-red {
+    0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 113, 108, 0.7); }
+    70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(255, 113, 108, 0); }
+    100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 113, 108, 0); }
+  }
+  --animate-pulse-red: pulse-red 2s infinite;
+}
+
+@layer base {
+  body {
+    @apply bg-background text-on-surface antialiased;
+  }
+
+  .pin-dot::placeholder {
+    color: transparent;
+  }
+
+  .pin-dot:not(:placeholder-shown) {
+    -webkit-text-security: disc;
+  }
+}

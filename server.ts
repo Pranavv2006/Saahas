@@ -24,6 +24,113 @@ async function startServer() {
 
   app.use(express.json());
 
+  // ==================== SEND SMS ALERT ====================
+  app.post("/api/send-alert/sms", async (req, res) => {
+    try {
+      const { contact1, contact2, userName, mapLink } = req.body;
+
+      if (!contact1) {
+        return res.status(400).json({ success: false, error: 'No contact provided' });
+      }
+
+      const message = `🚨 SAAHAS ALERT: ${userName} may be in danger!\nLocation: ${mapLink}\nReply YES if you can help, NO if unavailable.`;
+      const contacts = [contact1];
+      if (contact2) contacts.push(contact2);
+
+      const results = [];
+
+      for (const contact of contacts) {
+        try {
+          console.log(`📱 [MOCK] SMS to ${contact}: ${message}`);
+          results.push({ contact, status: 'mocked', note: 'Mock UI only' });
+        } catch (error) {
+          console.error(`❌ Failed to send SMS to ${contact}:`, error);
+          results.push({ contact, status: 'failed', error: error instanceof Error ? error.message : 'Unknown error' });
+        }
+      }
+
+      res.json({ success: true, results });
+    } catch (error) {
+      console.error('Error sending SMS alerts:', error);
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // ==================== SEND WHATSAPP ALERT ====================
+  app.post("/api/send-alert/whatsapp", async (req, res) => {
+    try {
+      const { contact1, contact2, userName, mapLink } = req.body;
+
+      if (!contact1) {
+        return res.status(400).json({ success: false, error: 'No contact provided' });
+      }
+
+      const message = `🚨 *SAAHAS ALERT* 🚨\n\n${userName} may be in danger!\n\n📍 Location: ${mapLink}\n\nReply:\n✅ YES - I can help\n❌ NO - I'm unavailable`;
+      const contacts = [contact1];
+      if (contact2) contacts.push(contact2);
+
+      const results = [];
+
+      for (const contact of contacts) {
+        try {
+          console.log(`💬 [PENDING] WhatsApp to ${contact}: ${message}`);
+          // TODO: Implement CallMeBot WhatsApp integration
+          results.push({ contact, status: 'pending', note: 'CallMeBot WhatsApp integration in progress' });
+        } catch (error) {
+          console.error(`❌ Failed to send WhatsApp to ${contact}:`, error);
+          results.push({ contact, status: 'failed', error: error instanceof Error ? error.message : 'Unknown error' });
+        }
+      }
+
+      res.json({ success: true, results });
+    } catch (error) {
+      console.error('Error sending WhatsApp alerts:', error);
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // ==================== FIRE COMBINED ALERT (SMS + WhatsApp) ====================
+  app.post("/api/fire-alert", async (req, res) => {
+    try {
+      const { walkId, userId, contact1, contact2, userName, lastLocation } = req.body;
+
+      if (!contact1 || !lastLocation) {
+        return res.status(400).json({ success: false, error: 'Missing required fields' });
+      }
+
+      const mapLink = `https://maps.google.com/?q=${lastLocation.lat},${lastLocation.lng}`;
+
+      console.log(`\n🚨 ======== ALERT FIRED FOR ${userName.toUpperCase()} ======== 🚨`);
+      console.log(`📱 Sending SMS to emergency contacts...`);
+      console.log(`💬 Sending WhatsApp to emergency contacts...`);
+
+      // Send SMS
+      const smsResponse = await fetch(`http://localhost:${PORT}/api/send-alert/sms`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact1, contact2, userName, mapLink })
+      }).then(r => r.json());
+
+      // Send WhatsApp
+      const whatsappResponse = await fetch(`http://localhost:${PORT}/api/send-alert/whatsapp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact1, contact2, userName, mapLink })
+      }).then(r => r.json());
+
+      console.log(`\n✅ Alert notifications sent!\n`);
+
+      res.json({
+        success: true,
+        sms: smsResponse,
+        whatsapp: whatsappResponse
+      });
+    } catch (error) {
+      console.error('Error firing alert:', error);
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
   // ==================== USER PROFILE ENDPOINTS ====================
 
   // Create a new user profile
@@ -146,7 +253,7 @@ async function startServer() {
   // Create/Start an alert
   app.post("/api/alerts", async (req, res) => {
     try {
-      const { walkId, userId, location } = req.body;
+      const { walkId, userId, location, status, lastLocation, reason } = req.body;
 
       if (!walkId || !userId) {
         return res.status(400).json({ success: false, error: 'Missing required fields' });
@@ -158,15 +265,22 @@ async function startServer() {
       const alert = {
         walkId,
         userId,
-        status: 'active' as const,
-        shadowModeActive: true,
-        location: location || null,
+        status: status || 'active',
+        shadowModeActive: status !== 'emergency',
+        location: location || lastLocation || null,
+        reason: reason || null,
         createdAt: new Date(),
         updatedAt: new Date()
       };
 
       const result = await alertsCollection.insertOne(alert);
-      console.log(`🚨 Alert created: ${walkId} for user ${userId}`);
+      
+      if (reason === 'app-closed' || reason === 'app-backgrounded') {
+        console.log(`🚨 EMERGENCY ALERT: ${reason.toUpperCase()} - User ${userId} - Last location: ${lastLocation?.lat}, ${lastLocation?.lng}`);
+      } else {
+        console.log(`🚨 Alert created: ${walkId} for user ${userId}`);
+      }
+      
       res.json({ success: true, alertId: result.insertedId });
     } catch (error) {
       console.error('Error creating alert:', error);

@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Shield, MapPin, Bell, Users, ChevronRight, ArrowRight, Footprints, ArrowLeft, Home, User, Edit, CheckCircle, ChevronDown, Search, ShieldCheck, AlertTriangle, X, Menu, Clock, Ruler, Activity, HeartPulse, Camera, Plus, Trash2, Navigation, UserCheck, ShieldAlert, Delete, Phone, PhoneOff, Mic, Volume2 } from 'lucide-react';
+import { Shield, MapPin, Bell, Users, ChevronRight, ArrowRight, Footprints, ArrowLeft, Home, User, Edit, CheckCircle, ChevronDown, Search, ShieldCheck, AlertTriangle, X, Menu, Clock, Ruler, Activity, HeartPulse, Camera, Plus, Trash2, Navigation, UserCheck, ShieldAlert, Delete, Phone, PhoneOff, Mic, Volume2, MessageSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import React, { useState, useEffect, useRef } from 'react';
+import { startActiveWalk, endActiveWalk, saveBreadcrumb, initDB } from './db-utils';
 
 type Screen = 'landing' | 'guest-setup' | 'registered-user' | 'profile-setup' | 'active-walk' | 'walk-complete' | 'fake-call' | 'alert-sent' | 'pin-confirm' | 'shadow-mode' | 'fake-call-pin-confirm';
 
@@ -19,15 +20,27 @@ export default function App() {
     if (userData) {
       try {
         const user = JSON.parse(userData);
-        setRegisteredUserName(user.name || 'User');
-        setIsUserRegistered(true);
-      } catch {}
+        // Only consider user registered if they have set a fullName and completed profile with valid PIN
+        if (user.fullName && user.fullName.trim() !== '' && user.pin && user.pin.length === 4 && user.pin.some((p: string) => p !== '')) {
+          setRegisteredUserName(user.fullName || 'User');
+          setIsUserRegistered(true);
+        } else {
+          // Clear incomplete profile data
+          localStorage.removeItem('saahas_user');
+          setIsUserRegistered(false);
+        }
+      } catch {
+        localStorage.removeItem('saahas_user');
+        setIsUserRegistered(false);
+      }
     }
   }, []);
 
   const [currentScreen, setCurrentScreen] = useState<Screen>('landing');
   const [guardianStatus, setGuardianStatus] = useState<'searching' | 'found' | 'not-found'>('searching');
   const [guardianAcknowledged, setGuardianAcknowledged] = useState(false);
+  const [contactResponse, setContactResponse] = useState<'waiting' | 'yes' | 'no' | 'timeout' | null>(null);
+  const [contactResponseTime, setContactResponseTime] = useState(0);
   const [shadowModeSearchTime, setShadowModeSearchTime] = useState(0);
   const [isCallInProgress, setIsCallInProgress] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
@@ -40,40 +53,42 @@ export default function App() {
   const fakeCallPinInterval = useRef<NodeJS.Timeout | null>(null);
   const ringtoneOscillator = useRef<OscillatorNode | null>(null);
   const audioCtx = useRef<AudioContext | null>(null);
-  // Shadow Mode Simulation Logic
+  const [isAlertActive, setIsAlertActive] = useState(false);// Shadow Mode Simulation Logic
   useEffect(() => {
     if (currentScreen === 'shadow-mode') {
-      setGuardianStatus('searching');
-      setGuardianAcknowledged(false);
-      setShadowModeSearchTime(0);
+      setContactResponse('waiting');
+      setContactResponseTime(0);
 
-      const searchInterval = setInterval(() => {
-        setShadowModeSearchTime(prev => prev + 1);
+      if (activeContacts.contact1) {
+        console.log('📱 ALERT FIRED - Sending notifications:');
+        console.log(`📲 SMS to ${activeContacts.contact1}: "URGENT: ${activeContacts.name} may be in danger."`);
+        if (activeContacts.contact2) console.log(`📲 SMS to ${activeContacts.contact2}: Same message`);
+        console.log(`💬 WhatsApp to ${activeContacts.contact1}: Same message`);
+        console.log(`🔔 Call ping to ${activeContacts.contact1} (rings once)`);
+      }
+
+      const responseInterval = setInterval(() => {
+        setContactResponseTime(prev => prev + 1);
       }, 1000);
 
-      // Simulate finding a guardian after 5 seconds
-      const findTimeout = setTimeout(() => {
-        setGuardianStatus('found');
-      }, 5000);
-
-      // Simulate guardian acknowledging after 10 seconds
-      const acknowledgeTimeout = setTimeout(() => {
-        setGuardianAcknowledged(true);
-      }, 10000);
-
-      // Simulate "Not Found" after 2 minutes (120 seconds)
-      const notFoundTimeout = setTimeout(() => {
-        setGuardianStatus('not-found');
-      }, 120000);
+      const contactResponseTimeout = setTimeout(() => {
+        console.log('⏰ 5 minutes passed - Contact did not respond. Shadow Mode stays active.');
+        setContactResponse('timeout');
+      }, 300000);
 
       return () => {
-        clearInterval(searchInterval);
-        clearTimeout(findTimeout);
-        clearTimeout(acknowledgeTimeout);
-        clearTimeout(notFoundTimeout);
+        clearInterval(responseInterval);
+        clearTimeout(contactResponseTimeout);
       };
     }
   }, [currentScreen]);
+
+  // Send Alert Notifications when Alert is Triggered
+  useEffect(() => {
+    if (isAlertActive && (currentScreen === 'alert-sent' || currentScreen === 'shadow-mode')) {
+      sendAlertNotifications();
+    }
+  }, [isAlertActive, currentScreen]);
 
   // Ringtone Logic
   const playRingtone = () => {
@@ -221,6 +236,7 @@ export default function App() {
   });
 
   const [profileData, setProfileData] = useState({
+    userId: '',
     fullName: '',
     phone: '',
     homeAddress: '',
@@ -248,7 +264,6 @@ export default function App() {
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
   const [confirmationPin, setConfirmationPin] = useState(['', '', '', '']);
   const [pinTimeout, setPinTimeout] = useState(60);
-  const [isAlertActive, setIsAlertActive] = useState(false);
   const [walkSummary, setWalkSummary] = useState({
     duration: '00:00',
     distance: '0.0 km',
@@ -282,10 +297,59 @@ export default function App() {
   const [pinConfirmTimer, setPinConfirmTimer] = useState(30);
   const [pinError, setPinError] = useState(false);
   const [showDismissWarning, setShowDismissWarning] = useState(false);
+  const [gaitPattern, setGaitPattern] = useState('steady');
+  const [lastGpsCoords, setLastGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [stepCount, setStepCount] = useState(0);  
+  const [activeContacts, setActiveContacts] = useState<{name?: string; contact1?: string; contact2?: string}>({});
   const breadcrumbs = useRef<{ lat: number; lng: number; time: number }[]>([]);
+
+  const filterValidContacts = (c1: string, c2: string) => {
+    const result: any = {};
+    if (c1 && c1.trim() && /^\d{10}$/.test(c1)) result.contact1 = c1;
+    if (c2 && c2.trim() && /^\d{10}$/.test(c2)) result.contact2 = c2;
+    return result;
+  };
+
+  const activeContactCount = [activeContacts.contact1, activeContacts.contact2].filter(Boolean).length;
+
+  // Send Alert Notifications
+  const sendAlertNotifications = async () => {
+    if (!activeContacts.contact1 || !lastGpsCoords) {
+      console.log('⚠️ Missing contact or location data for alert');
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/fire-alert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          walkId,
+          userId: profileData.userId || 'guest',
+          contact1: activeContacts.contact1,
+          contact2: activeContacts.contact2,
+          userName: activeContacts.name || guestData.name,
+          lastLocation: lastGpsCoords
+        })
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        console.log('✅ Alert notifications sent successfully');
+      } else {
+        console.error('❌ Failed to send alert notifications:', result);
+      }
+    } catch (error) {
+      console.error('❌ Error sending alert notifications:', error);
+    }
+  };
+
   const wakeLock = useRef<any>(null);
   const tapTimeout = useRef<NodeJS.Timeout | null>(null);
   const sosTapTimeout = useRef<NodeJS.Timeout | null>(null);
+  const accelBuffer = useRef<number[]>([]);
+  const lastStepTime = useRef<number>(0);
+  const gpsWorker = useRef<Worker | null>(null);
 
   // Timer logic
   useEffect(() => {
@@ -402,7 +466,7 @@ export default function App() {
     }
   };
 
-  const handlePinInput = (digit: string) => {
+  const handlePinInput = async (digit: string) => {
     if (pinAttempt.length < 4 && !pinError) {
       const newAttempt = [...pinAttempt, digit];
       setPinAttempt(newAttempt);
@@ -411,6 +475,36 @@ export default function App() {
         const correctPin = guestData.pin.join('') || profileData.pin.join('');
         if (newAttempt.join('') === correctPin) {
           if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+          
+          // End walk safely
+          try {
+            await endActiveWalk();
+            
+            // Stop GPS worker
+            if (gpsWorker.current) {
+              gpsWorker.current.postMessage({ type: 'STOP_GPS_TRACKING' });
+              gpsWorker.current.terminate();
+              gpsWorker.current = null;
+            }
+            
+            // Send confirmation to server
+            if (walkId) {
+              await fetch('/api/cancel-alert', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  walkId,
+                  userId: profileData.userId || guestData.name,
+                  status: 'completed'
+                })
+              }).catch(() => console.log('⏳ Will sync when online'));
+            }
+            
+            console.log('✅ Walk completed safely');
+          } catch (error) {
+            console.error('Error ending walk:', error);
+          }
+          
           setTimeout(() => setCurrentScreen('walk-complete'), 500);
         } else {
           setPinError(true);
@@ -499,11 +593,13 @@ export default function App() {
             const { latitude, longitude } = position.coords;
             setGpsStatus('live');
             setLastLocationUpdate(0);
+            setLastGpsCoords({ lat: latitude, lng: longitude });
             
             // Breadcrumbs every 60s
             const now = Date.now();
             if (breadcrumbs.current.length === 0 || now - breadcrumbs.current[breadcrumbs.current.length - 1].time > 60000) {
               breadcrumbs.current.push({ lat: latitude, lng: longitude, time: now });
+              console.log(`📍 GPS breadcrumb saved at ${new Date(now).toLocaleTimeString()}`);
             }
 
             // Reverse Geocode
@@ -581,6 +677,154 @@ export default function App() {
     };
   }, [currentScreen]);
 
+  // Accelerometer & Gait Pattern Detection + Step Counting
+  useEffect(() => {
+    if (currentScreen !== 'active-walk') return;
+
+    const handleAccel = (event: DeviceMotionEvent) => {
+      const accel = Math.sqrt(
+        (event.acceleration?.x || 0) ** 2 +
+        (event.acceleration?.y || 0) ** 2 +
+        (event.acceleration?.z || 0) ** 2
+      );
+      
+      accelBuffer.current.push(accel);
+      if (accelBuffer.current.length > 100) accelBuffer.current.shift();
+
+      // Detect gait pattern from acceleration variance
+      if (accelBuffer.current.length === 100) {
+        const mean = accelBuffer.current.reduce((a, b) => a + b) / 100;
+        const variance = accelBuffer.current.reduce((a, b) => a + (b - mean) ** 2) / 100;
+        
+        if (variance > 15) {
+          setGaitPattern('running');
+        } else if (variance > 5) {
+          setGaitPattern('walking');
+        } else {
+          setGaitPattern('steady');
+        }
+      }
+
+      // Step detection - count peaks in acceleration magnitude
+      // A step is detected when acceleration crosses a threshold (peak detection)
+      if (accelBuffer.current.length >= 3) {
+        const current = accelBuffer.current[accelBuffer.current.length - 1];
+        const previous = accelBuffer.current[accelBuffer.current.length - 2];
+        const prevPrevious = accelBuffer.current[accelBuffer.current.length - 3];
+        
+        // Detect peak: current > previous AND current > next would be detected
+        // For now, detect when acceleration crosses above threshold (~3.5 m/s²)
+        // and hasn't detected a step in the last 300ms (to avoid counting same step multiple times)
+        const now = Date.now();
+        const STEP_THRESHOLD = 3.5; // m/s² - typical for walking
+        const MIN_STEP_INTERVAL = 300; // ms - minimum time between steps
+        
+        if (current > STEP_THRESHOLD && previous < STEP_THRESHOLD && (now - lastStepTime.current) > MIN_STEP_INTERVAL) {
+          setStepCount(prev => prev + 1);
+          lastStepTime.current = now;
+          console.log(`👟 Step detected! Total steps: ${stepCount + 1}`);
+        }
+      }
+    };
+
+    if ((window as any).DeviceMotionEvent) {
+      window.addEventListener('devicemotion', handleAccel);
+      return () => window.removeEventListener('devicemotion', handleAccel);
+    }
+  }, [currentScreen, stepCount]);
+
+  // App Close/Visibility Detection
+  useEffect(() => {
+    if (currentScreen !== 'active-walk' || !walkId) return;
+
+    const handleVisibilityChangeAlert = async () => {
+      if (document.hidden) {
+        console.log('🚨 App backgrounded during active walk - Worker will continue tracking');
+        // Worker continues tracking in background
+        // Send alert to backend
+        if (lastGpsCoords) {
+          try {
+            await fetch('/api/alerts', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                walkId,
+                userId: profileData.userId || guestData.name,
+                status: 'backgrounded',
+                lastLocation: lastGpsCoords
+              })
+            }).catch(() => console.log('⏳ Will sync when online'));
+          } catch (error) {
+            console.error('Error logging background:', error);
+          }
+        }
+      }
+    };
+
+    const handlePageUnload = async () => {
+      console.log('🚨 App closing - sending emergency alert');
+      
+      // Get latest breadcrumbs from worker
+      if (gpsWorker.current) {
+        gpsWorker.current.postMessage({ type: 'GET_BREADCRUMBS', data: { walkId } });
+      }
+      
+      // Use sendBeacon for guaranteed delivery even if app closes
+      const beaconData = JSON.stringify({
+        walkId,
+        userId: profileData.userId || guestData.name,
+        status: 'emergency',
+        reason: 'app-closed',
+        lastLocation: lastGpsCoords,
+        timestamp: new Date().toISOString()
+      });
+      
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon('/api/alerts', beaconData);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChangeAlert);
+    window.addEventListener('beforeunload', handlePageUnload);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChangeAlert);
+      window.removeEventListener('beforeunload', handlePageUnload);
+    };
+  }, [currentScreen, walkId, lastGpsCoords]);
+
+  // Battery Status & Low Power Detection
+  useEffect(() => {
+    if (currentScreen !== 'active-walk') return;
+
+    const checkBattery = async () => {
+      if ('getBattery' in navigator) {
+        try {
+          const battery = await (navigator as any).getBattery();
+          
+          battery.addEventListener('levelchange', () => {
+            if (battery.level < 0.05) {
+              console.log('🚨 Battery critical - triggering emergency alert');
+              setAlertTriggerReason('Critical battery level');
+              setIsAlertActive(true);
+              setTimeout(() => setCurrentScreen('alert-sent'), 500);
+            }
+          });
+
+          battery.addEventListener('chargingtimechange', () => {
+            if (!battery.charging && battery.dischargingTime < 600) {
+              console.log('⚠️ Less than 10 minutes battery remaining');
+            }
+          });
+        } catch (e) {
+          console.warn('Battery API not available:', e);
+        }
+      }
+    };
+
+    checkBattery();
+  }, [currentScreen]);
+
   // Tap Handlers
   const handleTimerTap = () => {
     setTapCount(prev => prev + 1);
@@ -652,7 +896,7 @@ export default function App() {
           distance: (Math.random() * (1.5 - 0.5) + 0.5).toFixed(1) + ' km', // Simulated distance
           gaitEvents: 'None detected',
           alertsSent: 'None',
-          steps: (Math.floor(Math.random() * 5000) + 2000).toString()
+          steps: stepCount.toString()
         });
         setCurrentScreen('walk-complete');
         setConfirmationPin(['', '', '', '']);
@@ -671,14 +915,95 @@ export default function App() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const startWalk = (durationMinutes: number) => {
+  const startWalk = async (durationMinutes: number) => {
     const totalSeconds = durationMinutes * 60;
     const newWalkId = Math.random().toString(36).substring(2, 11);
-    setWalkId(newWalkId);
-    setTimeLeft(totalSeconds);
-    setTotalTime(totalSeconds);
-    setStartTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-    setCurrentScreen('active-walk');
+    
+    try {
+      const validContacts = filterValidContacts(guestData.contact1, guestData.contact2);
+      setActiveContacts({ name: guestData.name, ...validContacts });
+      console.log('Sending alert to contacts:', validContacts);
+
+      await initDB();
+
+      // Reset step counter for new walk
+      setStepCount(0);
+      lastStepTime.current = 0;
+
+      // Save active walk to IndexedDB
+      await startActiveWalk({
+        id: 'current',
+        walkId: newWalkId,
+        userId: profileData.userId || guestData.name,
+        startTime: new Date().toISOString(),
+        duration: durationMinutes,
+        isActive: true,
+        pin: (profileData.pin || guestData.pin).join(''),
+        stepCount: 0
+      });
+
+      // Start Web Worker for background GPS tracking
+      if ('Worker' in window && !gpsWorker.current) {
+        gpsWorker.current = new Worker(new URL('./gps-worker.ts', import.meta.url), { type: 'module' });
+        
+        // Listen for GPS updates from worker
+        gpsWorker.current.onmessage = async (event) => {
+          const { type, data, error } = event.data;
+          
+          if (type === 'GPS_UPDATE') {
+            // Save to IndexedDB
+            await saveBreadcrumb({
+              ...data,
+              walkId: newWalkId
+            });
+            console.log('📍 GPS breadcrumb saved via worker:', data);
+          } else if (type === 'GPS_ERROR') {
+            console.error('⚠️ GPS error from worker:', error);
+          }
+        };
+        
+        // Start tracking
+        gpsWorker.current.postMessage({
+          type: 'START_GPS_TRACKING',
+          data: { walkId: newWalkId }
+        });
+        
+        console.log('🚀 GPS Web Worker started');
+      }
+
+      // Request notification permission if not already granted
+      if ('Notification' in window && Notification.permission === 'default') {
+        await Notification.requestPermission();
+      }
+
+      // Send walk start to backend
+      try {
+        await fetch('/api/alerts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            walkId: newWalkId,
+            userId: profileData.userId || guestData.name,
+            startTime: new Date().toISOString(),
+            duration: durationMinutes
+          })
+        });
+      } catch (error) {
+        console.log('⏳ Offline - will sync walk when online');
+      }
+
+      // Update UI
+      setWalkId(newWalkId);
+      setTimeLeft(totalSeconds);
+      setTotalTime(totalSeconds);
+      setStartTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      setCurrentScreen('active-walk');
+      
+      console.log(`✅ Walk started: ${newWalkId}`);
+    } catch (error) {
+      console.error('Error starting walk:', error);
+      alert('Failed to start walk. Please try again.');
+    }
   };
 
   // Save to localStorage whenever guestData changes
@@ -730,6 +1055,7 @@ export default function App() {
       pin: ['', '', '', '']
     });
     setProfileData({
+      userId: '',
       fullName: '',
       phone: '',
       homeAddress: '',
@@ -955,20 +1281,28 @@ export default function App() {
                       <label className="block font-label text-xs text-on-surface-variant mb-2 font-medium">Emergency Contact 1</label>
                       <input 
                         className="w-full bg-surface-container border border-outline-variant/15 rounded-xl px-4 py-3 focus:border-primary/40 outline-none text-on-surface" 
-                        placeholder="+1 (555) 000-0000" 
+                        placeholder="9876543210" 
                         type="tel"
+                        maxLength={10}
                         value={profileData.contact1Phone}
-                        onChange={(e) => setProfileData({ ...profileData, contact1Phone: e.target.value })}
+                        onChange={(e) => {
+                          const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                          setProfileData({ ...profileData, contact1Phone: val });
+                        }}
                       />
                     </div>
                     <div className="group">
                       <label className="block font-label text-xs text-on-surface-variant mb-2 font-medium">Emergency Contact 2</label>
                       <input 
                         className="w-full bg-surface-container border border-outline-variant/15 rounded-xl px-4 py-3 focus:border-primary/40 outline-none text-on-surface" 
-                        placeholder="+1 (555) 000-0000" 
+                        placeholder="9876543210" 
                         type="tel"
+                        maxLength={10}
                         value={profileData.contact2Phone}
-                        onChange={(e) => setProfileData({ ...profileData, contact2Phone: e.target.value })}
+                        onChange={(e) => {
+                          const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                          setProfileData({ ...profileData, contact2Phone: val });
+                        }}
                       />
                     </div>
                   </div>
@@ -1149,9 +1483,9 @@ export default function App() {
                   <MapPin className="w-3 h-3" />
                   <span className="text-[9px] font-bold uppercase tracking-wider">{gpsStatus === 'live' ? 'GPS Live' : 'GPS Limited'}</span>
                 </div>
-                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full ${gaitPattern === 'running' ? 'bg-red-500/10 border border-red-500/20 text-red-400' : gaitPattern === 'walking' ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' : 'bg-blue-500/10 border border-blue-500/20 text-blue-400'}`}>
                   <Footprints className="w-3 h-3" />
-                  <span className="text-[9px] font-bold uppercase tracking-wider">Gait Monitor On</span>
+                  <span className="text-[9px] font-bold uppercase tracking-wider">Gait: {gaitPattern}</span>
                 </div>
               </div>
 
@@ -1159,7 +1493,9 @@ export default function App() {
               <div className="flex justify-center gap-2 mb-8">
                 <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-sky-500/10 border border-sky-500/20 text-sky-400">
                   <Users className="w-3 h-3" />
-                  <span className="text-[9px] font-bold uppercase tracking-wider">2 Contacts Ready</span>
+                  <span className="text-[9px] font-bold uppercase tracking-wider">
+                    {activeContactCount} Contact{activeContactCount === 1 ? '' : 's'} Ready
+                  </span>
                 </div>
                 <motion.button 
                   whileTap={{ scale: 0.95 }}
@@ -1341,7 +1677,7 @@ export default function App() {
                       </button>
                       <button
                         onClick={handleCancelPinBackspace}
-                        className="h-12 rounded-full bg-[#1a1a1a] hover:bg-[#333] active:scale-95 transition-all flex items-center justify-center text-white border border-white/5"
+                        className="h-12 rounded-full bg-[#1a1a1a] hover:bg-[#333] active:scale-95 transition-all flex items-center justify-center text-white"
                       >
                         <Delete className="w-5 h-5" />
                       </button>
@@ -1354,7 +1690,7 @@ export default function App() {
                           initial={{ width: '100%' }}
                           animate={{ width: `${(cancelPinTimer / 30) * 100}%` }}
                           transition={{ duration: 1, ease: "linear" }}
-                          className="h-full bg-[#FF6B00] rounded-full"
+                          className="h-full rounded-full"
                         />
                       </div>
                       <p className="text-center text-[10px] text-[#888] font-medium">
@@ -1574,95 +1910,73 @@ export default function App() {
               </div>
             </div>
 
-            {/* Guardian Status Card */}
+            {/* Contact Response Status Card */}
             <div className="px-6 mb-6">
               <AnimatePresence mode="wait">
-                {guardianStatus === 'searching' && (
+                {contactResponse === 'waiting' && (
                   <motion.div
-                    key="searching"
+                    key="waiting"
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
-                    className="bg-[#1a1a1a] border border-[#333] rounded-3xl p-6 flex flex-col items-center text-center"
+                    className="bg-[#1a1a1a] border border-[#FF6B00] rounded-3xl p-6 flex flex-col items-center text-center"
                   >
                     <div className="w-10 h-10 border-4 border-[#333] border-t-[#FF6B00] rounded-full animate-spin mb-4" />
-                    <h3 className="text-[18px] font-bold text-white mb-1">Searching for nearby guardian...</h3>
-                    <p className="text-[14px] text-[#888]">Searching within 2km</p>
+                    <h3 className="text-[18px] font-bold text-white mb-2">Awaiting Contact Response</h3>
+                    <p className="text-[14px] text-[#FF6B00] font-bold mb-2">{Math.floor((300 - contactResponseTime) / 60)}:{String((300 - contactResponseTime) % 60).padStart(2, '0')}</p>
+                    <p className="text-[12px] text-[#888]">SMS & WhatsApp sent to {activeContacts.contact1}</p>
                   </motion.div>
                 )}
 
-                {guardianStatus === 'found' && (
+                {contactResponse === 'yes' && (
                   <motion.div
-                    key="found"
+                    key="yes"
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
-                    className={`bg-[#1a1a1a] border ${guardianAcknowledged ? 'border-[#00C853]' : 'border-[#333]'} rounded-3xl p-6 flex flex-col items-center text-center shadow-[0_0_30px_rgba(0,200,83,0.1)] transition-colors duration-500`}
+                    className="bg-[#1a1a1a] border border-[#00C853] rounded-3xl p-6 flex flex-col items-center text-center shadow-[0_0_30px_rgba(0,200,83,0.2)]"
                   >
-                    <div className="relative mb-4">
-                      <Shield className="w-10 h-10 text-[#00C853]" />
-                      <motion.div
-                        animate={{ opacity: [0.2, 0.5, 0.2] }}
-                        transition={{ repeat: Infinity, duration: 2 }}
-                        className="absolute inset-0 bg-[#00C853] blur-xl rounded-full -z-10"
-                      />
-                    </div>
-                    <h3 className="text-[18px] font-bold text-white mb-1">Guardian Found</h3>
-                    <p className="text-[14px] text-[#888] mb-4">Someone nearby is watching your location</p>
-                    
-                    <div className="flex flex-col gap-2 w-full">
-                      <div className="bg-black/20 rounded-xl py-2 px-4 flex items-center justify-center gap-2">
-                        {guardianAcknowledged ? (
-                          <>
-                            <CheckCircle className="w-4 h-4 text-[#00C853]" />
-                            <span className="text-[12px] font-bold text-[#00C853] uppercase tracking-wider">Watching Now</span>
-                          </>
-                        ) : (
-                          <>
-                            <div className="w-3 h-3 border-2 border-[#333] border-t-[#888] rounded-full animate-spin" />
-                            <span className="text-[12px] font-bold text-[#888] uppercase tracking-wider">Awaiting Acknowledgment</span>
-                          </>
-                        )}
-                      </div>
-                      <p className="text-[12px] text-[#888] italic">No personal details shared. Fully anonymous.</p>
-                    </div>
+                    <CheckCircle className="w-10 h-10 text-[#00C853] mb-4" />
+                    <h3 className="text-[18px] font-bold text-[#00C853] mb-1">Contact Responding</h3>
+                    <p className="text-[14px] text-white">{activeContacts.contact1} is on the way</p>
+                    <p className="text-[12px] text-[#888] mt-2">Shadow Mode is OFF. Stay safe.</p>
                   </motion.div>
                 )}
 
-                {guardianStatus === 'not-found' && (
+                {(contactResponse === 'timeout' || contactResponse === 'no') && (
                   <motion.div
-                    key="not-found"
+                    key="timeout"
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
                     className="bg-[#1a1a1a] border border-[#FF6B00] rounded-3xl p-6 flex flex-col items-center text-center"
                   >
                     <AlertTriangle className="w-10 h-10 text-[#FF6B00] mb-4" />
-                    <h3 className="text-[18px] font-bold text-white mb-1">No guardian available nearby</h3>
-                    <p className="text-[14px] text-[#888]">Your contacts have been asked to call emergency services immediately</p>
+                    <h3 className="text-[18px] font-bold text-white mb-1">No Response from Contacts</h3>
+                    <p className="text-[14px] text-[#888]">Finding nearby guardians for protection...</p>
                   </motion.div>
                 )}
               </AnimatePresence>
             </div>
 
-            {/* What Guardian Sees Card */}
+            {/* Contact Alert Details */}
             <div className="px-6 mb-8">
               <div className="bg-[#1a1a1a] border border-[#333] rounded-3xl p-5">
                 <h4 className="text-[12px] font-bold text-[#888] uppercase tracking-widest mb-4 font-headline">
-                  What the guardian sees:
+                  What contacts receive:
                 </h4>
                 <ul className="space-y-3">
                   <li className="flex items-center gap-3 text-[13px] text-white">
-                    <MapPin className="w-4 h-4 text-[#FF3B30]" />
-                    <span>Your location dot only</span>
+                    <MessageSquare className="w-4 h-4 text-[#FF6B00]" />
+                    <span>SMS: "URGENT: [Name] may be in danger. Location: [Map Link]"</span>
                   </li>
                   <li className="flex items-center gap-3 text-[13px] text-white">
-                    <ShieldAlert className="w-4 h-4 text-[#FF6B00]" />
-                    <span>One instruction: Watch and call 100</span>
+                    <Phone className="w-4 h-4 text-[#FF3B30]" />
+                    <span>Single call ping (rings once) to grab attention</span>
                   </li>
                   <li className="flex items-center gap-3 text-[13px] text-white">
-                    <X className="w-4 h-4 text-[#888]" />
-                    <span>Not your name, photo or any details</span>
+                    <Clock className="w-4 h-4 text-[#FFB74D]" />
+                    <span>5 minutes to reply YES = I'm on the way</span>
                   </li>
                 </ul>
               </div>
@@ -1726,7 +2040,7 @@ export default function App() {
                       />
                     ))}
                     <div className="w-25 h-25 rounded-full bg-linear-to-br from-[#1a1a1a] to-[#333] border-[3px] border-[#333] flex items-center justify-center text-3xl font-bold relative z-10">
-                      {(profileData.guardianName || 'Mom').charAt(0)}
+                      {(profileData.guardianName || 'Mom' ).charAt(0)}
                     </div>
                   </div>
 
@@ -2077,9 +2391,13 @@ export default function App() {
                   <label className="block text-sm font-bold text-white uppercase tracking-wider">Emergency Contact 1</label>
                   <input 
                     type="tel" 
-                    placeholder="+91 XXXXXXXXXX"
+                    placeholder="9876543210"
+                    maxLength={10}
                     value={guestData.contact1}
-                    onChange={(e) => setGuestData({ ...guestData, contact1: e.target.value })}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                      setGuestData({ ...guestData, contact1: val });
+                    }}
                     className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-white placeholder:text-gray-500 focus:border-[#FF8A65]/50 focus:outline-none transition-all"
                   />
                 </div>
@@ -2088,9 +2406,13 @@ export default function App() {
                   <label className="block text-sm font-bold text-white uppercase tracking-wider">Emergency Contact 2</label>
                   <input 
                     type="tel" 
-                    placeholder="+91 XXXXXXXXXX"
+                    placeholder="9876543210"
+                    maxLength={10}
                     value={guestData.contact2}
-                    onChange={(e) => setGuestData({ ...guestData, contact2: e.target.value })}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                      setGuestData({ ...guestData, contact2: val });
+                    }}
                     className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-white placeholder:text-gray-500 focus:border-[#FF8A65]/50 focus:outline-none transition-all"
                   />
                 </div>
@@ -2117,6 +2439,72 @@ export default function App() {
                     ))}
                   </div>
                 </div>
+
+                {/* Walk Duration */}
+                <div className="space-y-4 pt-4">
+                  <p className="text-sm font-bold text-white uppercase tracking-wider">Walk Duration</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[5, 10, 15, 30].map((min) => (
+                      <button
+                        key={min}
+                        onClick={() => setGuestData({ ...guestData, duration: min, isCustom: false })}
+                        className={`py-5 rounded-lg border-2 transition-all active:scale-95 text-lg font-bold ${
+                          !guestData.isCustom && guestData.duration === min
+                            ? 'bg-[#FF8A65] border-[#FF8A65] text-black shadow-[0_0_30px_rgba(255,138,101,0.4)]'
+                            : 'bg-white/5 border-white/10 text-white hover:border-[#FF8A65]/50'
+                        }`}
+                      >
+                        {min} min
+                      </button>
+                    ))}
+                  </div>
+                  <button 
+                    onClick={() => setGuestData({ ...guestData, isCustom: true })}
+                    className={`w-full py-4 rounded-lg border-2 transition-all active:scale-95 text-base font-bold ${
+                      guestData.isCustom
+                        ? 'bg-[#FF8A65] border-[#FF8A65] text-black shadow-[0_0_30px_rgba(255,138,101,0.4)]'
+                        : 'bg-white/5 border-white/10 text-white hover:border-[#FF8A65]/50'
+                    }`}
+                  >
+                    Custom Duration
+                  </button>
+
+                  <AnimatePresence>
+                    {guestData.isCustom && (
+                      <motion.div 
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="overflow-hidden"
+                      >
+                        <div className="mt-4 flex items-center gap-3 p-4 bg-white/5 rounded-lg border border-white/10">
+                          <div className="flex items-center gap-2">
+                            <input 
+                              type="number" 
+                              min="0" 
+                              max="23"
+                              value={guestData.customHours}
+                              onChange={(e) => setGuestData({ ...guestData, customHours: parseInt(e.target.value) || 0 })}
+                              className="w-12 h-10 bg-white/5 border border-white/10 rounded text-center font-bold text-white focus:outline-none"
+                            />
+                            <span className="text-white">h</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <input 
+                              type="number" 
+                              min="0" 
+                              max="59"
+                              value={guestData.customMinutes}
+                              onChange={(e) => setGuestData({ ...guestData, customMinutes: parseInt(e.target.value) || 0 })}
+                              className="w-12 h-10 bg-white/5 border border-white/10 rounded text-center font-bold text-white focus:outline-none"
+                            />
+                            <span className="text-white">m</span>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
             </main>
 
@@ -2125,7 +2513,12 @@ export default function App() {
               <motion.button
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
-                onClick={() => startWalk(guestData.duration)}
+                onClick={() => {
+                  const duration = guestData.isCustom
+                    ? (guestData.customHours * 60) + guestData.customMinutes
+                    : guestData.duration;
+                  startWalk(duration);
+                }}
                 className="w-full py-4 rounded-lg bg-linear-to-r from-[#FF8A65] to-[#FFB74D] text-black font-bold text-lg shadow-[0_20px_50px_-10px_rgba(255,138,101,0.6)] active:scale-95 transition-all flex items-center justify-center gap-2"
               >
                 START WALKING

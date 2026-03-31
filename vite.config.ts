@@ -15,10 +15,26 @@ export default defineConfig(({mode}) => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      rollupOptions: {
+        input: {
+          main: path.resolve(__dirname, 'index.html'),
+          sw: path.resolve(__dirname, 'src/sw.ts'),
+          'gps-worker': path.resolve(__dirname, 'src/gps-worker.ts'),
+        },
+        output: {
+          entryFileNames: '[name].js',
+          chunkFileNames: 'chunks/[name].[hash].js',
+          assetFileNames: 'assets/[name].[hash][extname]'
+        }
+      },
+      sourcemap: true,
+    },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
+      headers: {
+        'Service-Worker-Allowed': '/',
+      }
     },
   };
 });

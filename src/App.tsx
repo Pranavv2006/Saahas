@@ -7,9 +7,24 @@ import { Shield, MapPin, Bell, Users, ChevronRight, ArrowRight, Footprints, Arro
 import { motion, AnimatePresence } from 'motion/react';
 import React, { useState, useEffect, useRef } from 'react';
 
-type Screen = 'landing' | 'guest-setup' | 'profile-setup' | 'active-walk' | 'walk-complete' | 'fake-call' | 'alert-sent' | 'pin-confirm' | 'shadow-mode' | 'fake-call-pin-confirm';
+type Screen = 'landing' | 'guest-setup' | 'registered-user' | 'profile-setup' | 'active-walk' | 'walk-complete' | 'fake-call' | 'alert-sent' | 'pin-confirm' | 'shadow-mode' | 'fake-call-pin-confirm';
 
 export default function App() {
+  // Check if user is registered on mount
+  const [isUserRegistered, setIsUserRegistered] = useState(false);
+  const [registeredUserName, setRegisteredUserName] = useState('');
+  
+  useEffect(() => {
+    const userData = localStorage.getItem('saahas_user');
+    if (userData) {
+      try {
+        const user = JSON.parse(userData);
+        setRegisteredUserName(user.name || 'User');
+        setIsUserRegistered(true);
+      } catch {}
+    }
+  }, []);
+
   const [currentScreen, setCurrentScreen] = useState<Screen>('landing');
   const [guardianStatus, setGuardianStatus] = useState<'searching' | 'found' | 'not-found'>('searching');
   const [guardianAcknowledged, setGuardianAcknowledged] = useState(false);
@@ -671,6 +686,11 @@ export default function App() {
     localStorage.setItem('saahas_guest', JSON.stringify(guestData));
   }, [guestData]);
 
+  // Save registered user data
+  useEffect(() => {
+    localStorage.setItem('saahas_user', JSON.stringify(profileData));
+  }, [profileData]);
+
   const handleGuestPinChange = (index: number, value: string) => {
     if (value.length > 1) return;
     const newPin = [...guestData.pin];
@@ -804,7 +824,7 @@ export default function App() {
                 initial={{ opacity: 0, y: 30 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.8, duration: 0.8, ease: [0.23, 1, 0.32, 1] }}
-                onClick={() => setCurrentScreen('guest-setup')}
+                onClick={() => setCurrentScreen(isUserRegistered ? 'registered-user' : 'guest-setup')}
                 className="w-full py-6 bg-linear-to-r from-[#FF8A65] to-[#FFB74D] rounded-[1.25rem] flex items-center justify-center gap-4 text-black font-black text-xl shadow-[0_20px_50px_-10px_rgba(255,138,101,0.6)] relative overflow-hidden group"
               >
                 <div className="absolute inset-0 bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
@@ -2007,110 +2027,178 @@ export default function App() {
               </section>
             </main>
           </motion.div>
-        ) : (
+        ) : currentScreen === 'guest-setup' ? (
           <motion.div
             key="guest-setup"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 20 }}
             transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-            className="min-h-screen flex flex-col bg-background relative"
+            className="min-h-screen flex flex-col bg-[#050608] relative"
           >
-            {/* Decorative Atmosphere */}
-            <div className="fixed top-[-10%] right-[-10%] w-[50%] h-[40%] bg-primary/5 blur-[120px] rounded-full -z-10" />
-            <div className="fixed bottom-[10%] left-[-20%] w-[60%] h-[40%] bg-tertiary/5 blur-[120px] rounded-full -z-10" />
+            {/* Decorative Background */}
+            <div className="fixed top-[-10%] right-[-10%] w-[50%] h-[40%] bg-[#FF8A65]/5 blur-[120px] rounded-full -z-10" />
+            <div className="fixed bottom-[10%] left-[-20%] w-[60%] h-[40%] bg-[#FFB74D]/5 blur-[120px] rounded-full -z-10" />
 
             {/* Header Section */}
-            <header className="px-6 pt-8 pb-4 flex items-center justify-between sticky top-0 z-10 bg-background/80 backdrop-blur-xl">
+            <header className="px-6 pt-8 pb-6 flex items-center justify-between sticky top-0 z-10 bg-[#050608]/80 backdrop-blur-xl">
               <button 
                 onClick={() => setCurrentScreen('landing')}
-                className="p-2 -ml-2 rounded-full hover:bg-surface-highest transition-colors active:scale-95 duration-200"
+                className="p-2 -ml-2 rounded-full hover:bg-white/10 transition-colors active:scale-95 duration-200"
               >
-                <ArrowLeft className="w-6 h-6 text-on-surface" />
+                <ArrowLeft className="w-6 h-6 text-white" />
               </button>
-              <div className="flex-1 px-4">
-                <h1 className="font-headline font-bold text-2xl tracking-tight text-white">सAAहस</h1>
-                <p className="font-sans text-on-surface-variant text-[10px] uppercase tracking-widest mt-0.5">Takes 30 seconds. Keeps you safe.</p>
-              </div>
-              <div className="w-10 h-10 rounded-full border border-outline-variant/20 flex items-center justify-center bg-surface-low">
-                <Shield className="w-5 h-5 text-primary" fill="currentColor" fillOpacity={0.2} />
-              </div>
+              <h1 className="font-bold text-2xl tracking-tight text-white">Quick Setup</h1>
+              <div className="w-10 h-10" />
             </header>
 
-            <main className="flex-1 px-6 pt-4 pb-32 overflow-y-auto">
-              <div className="space-y-8">
-                {/* User Info Section */}
-                <div className="space-y-6">
-                  <div className="relative">
-                    <label className="absolute -top-2 left-3 px-1 bg-background text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold">Your Name</label>
-                    <input 
-                      type="text" 
-                      placeholder="Enter your full name"
-                      value={guestData.name}
-                      onChange={(e) => setGuestData({ ...guestData, name: e.target.value })}
-                      className="w-full bg-surface-low border border-outline-variant/30 rounded-xl px-4 py-4 text-on-surface placeholder:text-on-surface-variant/40 focus:border-primary/40 focus:outline-none transition-all font-body"
-                    />
-                  </div>
-                  <div className="relative">
-                    <label className="absolute -top-2 left-3 px-1 bg-background text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold">Your Phone Number</label>
-                    <input 
-                      type="tel" 
-                      placeholder="+91 00000 00000"
-                      value={guestData.phone}
-                      onChange={(e) => setGuestData({ ...guestData, phone: e.target.value })}
-                      className="w-full bg-surface-low border border-outline-variant/30 rounded-xl px-4 py-4 text-on-surface placeholder:text-on-surface-variant/40 focus:border-primary/40 focus:outline-none transition-all font-body"
-                    />
-                  </div>
-                  <div className="relative">
-                    <label className="absolute -top-2 left-3 px-1 bg-background text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold">Emergency Contact 1</label>
-                    <input 
-                      type="tel" 
-                      placeholder="+91 00000 00000"
-                      value={guestData.contact1}
-                      onChange={(e) => setGuestData({ ...guestData, contact1: e.target.value })}
-                      className="w-full bg-surface-low border border-outline-variant/30 rounded-xl px-4 py-4 text-on-surface placeholder:text-on-surface-variant/40 focus:border-primary/40 focus:outline-none transition-all font-body"
-                    />
-                  </div>
-                  <div className="relative">
-                    <label className="absolute -top-2 left-3 px-1 bg-background text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold">Emergency Contact 2</label>
-                    <input 
-                      type="tel" 
-                      placeholder="+91 00000 00000"
-                      value={guestData.contact2}
-                      onChange={(e) => setGuestData({ ...guestData, contact2: e.target.value })}
-                      className="w-full bg-surface-low border border-outline-variant/30 rounded-xl px-4 py-4 text-on-surface placeholder:text-on-surface-variant/40 focus:border-primary/40 focus:outline-none transition-all font-body"
-                    />
-                  </div>
+            <main className="flex-1 px-6 pb-32 overflow-y-auto">
+              <div className="space-y-8 max-w-md mx-auto">
+                {/* Title */}
+                <div className="text-center space-y-2 mb-12">
+                  <p className="text-sm text-gray-400 uppercase tracking-widest font-bold">Takes 30 seconds</p>
+                  <h2 className="text-3xl font-bold text-white">Ready to walk?</h2>
                 </div>
 
-                {/* Walk Duration Selector */}
+                {/* Your Name */}
+                <div className="space-y-3">
+                  <label className="block text-sm font-bold text-white uppercase tracking-wider">Your Name</label>
+                  <input 
+                    type="text" 
+                    placeholder="Aditya"
+                    value={guestData.name}
+                    onChange={(e) => setGuestData({ ...guestData, name: e.target.value })}
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-white placeholder:text-gray-500 focus:border-[#FF8A65]/50 focus:outline-none transition-all"
+                  />
+                </div>
+
+                {/* Emergency Contacts */}
+                <div className="space-y-3">
+                  <label className="block text-sm font-bold text-white uppercase tracking-wider">Emergency Contact 1</label>
+                  <input 
+                    type="tel" 
+                    placeholder="+91 XXXXXXXXXX"
+                    value={guestData.contact1}
+                    onChange={(e) => setGuestData({ ...guestData, contact1: e.target.value })}
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-white placeholder:text-gray-500 focus:border-[#FF8A65]/50 focus:outline-none transition-all"
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  <label className="block text-sm font-bold text-white uppercase tracking-wider">Emergency Contact 2</label>
+                  <input 
+                    type="tel" 
+                    placeholder="+91 XXXXXXXXXX"
+                    value={guestData.contact2}
+                    onChange={(e) => setGuestData({ ...guestData, contact2: e.target.value })}
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-white placeholder:text-gray-500 focus:border-[#FF8A65]/50 focus:outline-none transition-all"
+                  />
+                </div>
+
+                {/* PIN Creation */}
+                <div className="space-y-3 pt-4">
+                  <div className="flex justify-between items-center">
+                    <label className="text-sm font-bold text-white uppercase tracking-wider">Safety PIN</label>
+                    <p className="text-[10px] text-gray-400">(4 digits)</p>
+                  </div>
+                  <p className="text-xs text-gray-400 mb-3">Keep this secret. It ends your walk safely.</p>
+                  <div className="flex justify-between gap-3 max-w-xs">
+                    {guestData.pin.map((digit, i) => (
+                      <input
+                        key={i}
+                        id={`pin-${i}`}
+                        type="password"
+                        inputMode="numeric"
+                        maxLength={1}
+                        value={digit}
+                        onChange={(e) => handleGuestPinChange(i, e.target.value)}
+                        className="w-16 h-16 bg-white/5 border border-white/10 rounded-lg text-center text-2xl font-bold text-white focus:border-[#FF8A65]/50 focus:outline-none transition-all"
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </main>
+
+            {/* Bottom Action */}
+            <footer className="fixed bottom-0 left-0 right-0 p-6 bg-linear-to-t from-[#050608] via-[#050608] to-transparent">
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => startWalk(guestData.duration)}
+                className="w-full py-4 rounded-lg bg-linear-to-r from-[#FF8A65] to-[#FFB74D] text-black font-bold text-lg shadow-[0_20px_50px_-10px_rgba(255,138,101,0.6)] active:scale-95 transition-all flex items-center justify-center gap-2"
+              >
+                START WALKING
+                <ArrowRight className="w-5 h-5" strokeWidth={3} />
+              </motion.button>
+            </footer>
+          </motion.div>
+        ) : currentScreen === 'registered-user' ? (
+          <motion.div
+            key="registered-user"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+            className="min-h-screen flex flex-col bg-[#050608] relative"
+          >
+            {/* Decorative Background */}
+            <div className="fixed top-[-10%] right-[-10%] w-[50%] h-[40%] bg-[#FF8A65]/5 blur-[120px] rounded-full -z-10" />
+            <div className="fixed bottom-[10%] left-[-20%] w-[60%] h-[40%] bg-[#FFB74D]/5 blur-[120px] rounded-full -z-10" />
+
+            {/* Header */}
+            <header className="px-6 pt-8 pb-8 flex items-center justify-between sticky top-0 z-10 bg-[#050608]/80 backdrop-blur-xl">
+              <button 
+                onClick={() => setCurrentScreen('landing')}
+                className="p-2 -ml-2 rounded-full hover:bg-white/10 transition-colors active:scale-95 duration-200"
+              >
+                <ArrowLeft className="w-6 h-6 text-white" />
+              </button>
+              <h1 className="font-bold text-2xl tracking-tight text-white">Saahas</h1>
+              <button 
+                onClick={() => setCurrentScreen('profile-setup')}
+                className="p-2 rounded-full hover:bg-white/10 transition-colors active:scale-95"
+              >
+                <User className="w-6 h-6 text-white" />
+              </button>
+            </header>
+
+            <main className="flex-1 px-6 pb-32 overflow-y-auto flex flex-col items-center justify-center">
+              {/* Welcome Message */}
+              <div className="text-center space-y-2 mb-16">
+                <p className="text-sm text-gray-400 uppercase tracking-widest font-bold">Welcome back</p>
+                <h2 className="text-4xl font-bold text-white">{registeredUserName}</h2>
+              </div>
+
+              {/* Duration Selection */}
+              <div className="w-full max-w-md space-y-6">
                 <div className="space-y-4">
-                  <h3 className="font-headline font-semibold text-sm uppercase tracking-wider text-on-surface/80">Walk Duration</h3>
-                  <div className="grid grid-cols-5 gap-2">
+                  <p className="text-sm font-bold text-white uppercase tracking-wider">Walk Duration</p>
+                  <div className="grid grid-cols-2 gap-3">
                     {[5, 10, 15, 30].map((min) => (
                       <button
                         key={min}
                         onClick={() => setGuestData({ ...guestData, duration: min, isCustom: false })}
-                        className={`py-3 rounded-xl border transition-all active:scale-95 text-sm font-headline font-bold ${
+                        className={`py-5 rounded-lg border-2 transition-all active:scale-95 text-lg font-bold ${
                           !guestData.isCustom && guestData.duration === min 
-                          ? 'bg-linear-to-br from-primary to-tertiary text-on-primary border-transparent shadow-[0_0_32px_rgba(255,143,120,0.15)]' 
-                          : 'bg-surface-low border-outline-variant/30 text-on-surface hover:border-primary/50'
+                            ? 'bg-[#FF8A65] border-[#FF8A65] text-black shadow-[0_0_30px_rgba(255,138,101,0.4)]' 
+                            : 'bg-white/5 border-white/10 text-white hover:border-[#FF8A65]/50'
                         }`}
                       >
-                        {min}m
+                        {min} min
                       </button>
                     ))}
-                    <button 
-                      onClick={() => setGuestData({ ...guestData, isCustom: true })}
-                      className={`py-3 rounded-xl border transition-all active:scale-95 text-xs font-headline font-bold ${
-                        guestData.isCustom 
-                        ? 'bg-linear-to-br from-primary to-tertiary text-on-primary border-transparent shadow-[0_0_32px_rgba(255,143,120,0.15)]' 
-                        : 'bg-surface-low border-outline-variant/30 text-on-surface hover:border-primary/50'
-                      }`}
-                    >
-                      Custom
-                    </button>
                   </div>
+                  <button 
+                    onClick={() => setGuestData({ ...guestData, isCustom: true })}
+                    className={`w-full py-4 rounded-lg border-2 transition-all active:scale-95 text-base font-bold ${
+                      guestData.isCustom 
+                        ? 'bg-[#FF8A65] border-[#FF8A65] text-black shadow-[0_0_30px_rgba(255,138,101,0.4)]' 
+                        : 'bg-white/5 border-white/10 text-white hover:border-[#FF8A65]/50'
+                    }`}
+                  >
+                    Custom Duration
+                  </button>
 
                   {/* Custom Time Input */}
                   <AnimatePresence>
@@ -2121,77 +2209,39 @@ export default function App() {
                         exit={{ opacity: 0, height: 0 }}
                         className="overflow-hidden"
                       >
-                        <div className="mt-3 flex items-center gap-3 p-4 bg-surface-high/30 rounded-2xl border border-outline-variant/20">
-                          <div className="flex-1 flex items-center justify-center gap-2">
-                            <div className="flex flex-col items-center">
-                              <span className="text-[10px] uppercase tracking-tighter text-on-surface-variant mb-1 font-bold">Hours</span>
-                              <input 
-                                type="number" 
-                                min="0" 
-                                max="23"
-                                value={guestData.customHours}
-                                onChange={(e) => setGuestData({ ...guestData, customHours: parseInt(e.target.value) || 0 })}
-                                className="w-12 h-10 bg-surface-low border border-outline-variant/30 rounded-lg text-center font-headline font-bold text-lg text-primary focus:ring-1 focus:ring-primary/40 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                              />
-                            </div>
-                            <span className="text-on-surface-variant font-bold text-xl mt-4">:</span>
-                            <div className="flex flex-col items-center">
-                              <span className="text-[10px] uppercase tracking-tighter text-on-surface-variant mb-1 font-bold">Minutes</span>
-                              <input 
-                                type="number" 
-                                min="0" 
-                                max="59"
-                                value={guestData.customMinutes}
-                                onChange={(e) => setGuestData({ ...guestData, customMinutes: parseInt(e.target.value) || 0 })}
-                                className="w-12 h-10 bg-surface-low border border-outline-variant/30 rounded-lg text-center font-headline font-bold text-lg text-primary focus:ring-1 focus:ring-primary/40 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                              />
-                            </div>
+                        <div className="mt-4 flex items-center gap-3 p-4 bg-white/5 rounded-lg border border-white/10">
+                          <div className="flex items-center gap-2">
+                            <input 
+                              type="number" 
+                              min="0" 
+                              max="23"
+                              value={guestData.customHours}
+                              onChange={(e) => setGuestData({ ...guestData, customHours: parseInt(e.target.value) || 0 })}
+                              className="w-12 h-10 bg-white/5 border border-white/10 rounded text-center font-bold text-white focus:outline-none"
+                            />
+                            <span className="text-white">h</span>
                           </div>
-                          <div className="h-10 w-px bg-outline-variant/20 mx-2" />
-                          <p className="flex-1 text-[10px] text-on-surface-variant leading-tight font-medium">Setting a custom duration allows for longer treks with your allies.</p>
+                          <div className="flex items-center gap-2">
+                            <input 
+                              type="number" 
+                              min="0" 
+                              max="59"
+                              value={guestData.customMinutes}
+                              onChange={(e) => setGuestData({ ...guestData, customMinutes: parseInt(e.target.value) || 0 })}
+                              className="w-12 h-10 bg-white/5 border border-white/10 rounded text-center font-bold text-white focus:outline-none"
+                            />
+                            <span className="text-white">m</span>
+                          </div>
                         </div>
                       </motion.div>
                     )}
                   </AnimatePresence>
                 </div>
-
-                {/* PIN Creation Section */}
-                <div className="space-y-4">
-                  <div className="flex flex-col space-y-1">
-                    <h3 className="font-headline font-semibold text-sm uppercase tracking-wider text-on-surface/80">Create Your Safety PIN</h3>
-                    <p className="font-sans text-on-surface-variant text-[11px] font-medium">Only this PIN ends your walk safely. Keep it secret.</p>
-                  </div>
-                  <div className="flex justify-between max-w-xs gap-4">
-                    {guestData.pin.map((digit, i) => (
-                      <input
-                        key={i}
-                        id={`pin-${i}`}
-                        type="password"
-                        inputMode="numeric"
-                        maxLength={1}
-                        value={digit}
-                        onChange={(e) => handleGuestPinChange(i, e.target.value)}
-                        className="w-14 h-16 bg-surface-highest border border-outline-variant/30 rounded-xl text-center text-2xl font-bold text-primary focus:ring-1 focus:ring-primary/40 focus:outline-none transition-all"
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                {/* Visual Context - Informational Card */}
-                <div className="bg-surface-high/50 p-5 rounded-2xl border border-outline-variant/10 flex items-start gap-4">
-                  <div className="w-10 h-10 rounded-full bg-primary/10 shrink-0 flex items-center justify-center">
-                    <MapPin className="w-5 h-5 text-primary" />
-                  </div>
-                  <div>
-                    <h4 className="font-headline font-bold text-sm text-on-surface">Live Ally Monitoring</h4>
-                    <p className="font-body text-xs text-on-surface-variant mt-1 leading-relaxed">Your selected contacts will receive a live tracking link once you begin. They'll be alerted if the timer expires without your PIN.</p>
-                  </div>
-                </div>
               </div>
             </main>
 
-            {/* Fixed Bottom Action Bar */}
-            <footer className="fixed bottom-0 left-0 w-full p-6 bg-linear-to-t from-background via-background to-transparent pt-12 z-20">
+            {/* Bottom Action */}
+            <footer className="fixed bottom-0 left-0 right-0 p-6 bg-linear-to-t from-[#050608] via-[#050608] to-transparent">
               <motion.button
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
@@ -2201,14 +2251,14 @@ export default function App() {
                     : guestData.duration;
                   startWalk(duration);
                 }}
-                className="w-full py-5 rounded-full bg-linear-to-r from-primary to-tertiary text-on-primary font-headline font-extrabold tracking-widest text-base shadow-[0_8px_30px_rgba(255,143,120,0.3)] active:scale-95 transition-all flex items-center justify-center gap-3"
+                className="w-full py-4 rounded-lg bg-linear-to-r from-[#FF8A65] to-[#FFB74D] text-black font-bold text-lg shadow-[0_20px_50px_-10px_rgba(255,138,101,0.6)] active:scale-95 transition-all flex items-center justify-center gap-2"
               >
                 START WALKING
                 <ArrowRight className="w-5 h-5" strokeWidth={3} />
               </motion.button>
             </footer>
           </motion.div>
-        )}
+        ) : null}
       </AnimatePresence>
     </div>
   );

@@ -1,35 +1,245 @@
+import dotenv from "dotenv";
+dotenv.config({ path: ".env.local" });
+
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { fileURLToPath } from "url";
+import { connectToMongoDB, getDB } from "./src/server/db.js";
+import { getUsersCollection, getAlertsCollection } from "./src/server/models.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function startServer() {
+  // Connect to MongoDB
+  try {
+    await connectToMongoDB();
+  } catch (error) {
+    console.warn('MongoDB connection failed. Running without database:', error);
+  }
+
   const app = express();
   const PORT = 3000;
 
   app.use(express.json());
 
-  // Mock server state
-  const activeAlerts: Record<string, { status: string; shadowModeActive: boolean }> = {};
+  // ==================== USER PROFILE ENDPOINTS ====================
 
-  // API routes
-  app.post("/api/cancel-alert", (req, res) => {
-    const { walkId } = req.body;
+  // Create a new user profile
+  app.post("/api/users", async (req, res) => {
+    try {
+      const { userId, name, phone, emergency_contact_1, emergency_contact_2, cancel_pin, preset_message, address, checkin_interval } = req.body;
+
+      // Validate required fields
+      if (!userId || !name || !phone || !cancel_pin) {
+        return res.status(400).json({ success: false, error: 'Missing required fields' });
+      }
+
+      const db = getDB();
+      const usersCollection = getUsersCollection(db);
+
+      const userProfile = {
+        userId,
+        name,
+        phone,
+        emergency_contact_1: emergency_contact_1 || '',
+        emergency_contact_2: emergency_contact_2 || '',
+        cancel_pin,
+        preset_message: preset_message || 'I may be in danger. Last location:',
+        address: address || '',
+        checkin_interval: checkin_interval || 5,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      const result = await usersCollection.insertOne(userProfile);
+      console.log(`✅ User profile created: ${userId}`);
+      res.json({ success: true, userId, id: result.insertedId });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('duplicate')) {
+        return res.status(409).json({ success: false, error: 'User already exists' });
+      }
+      console.error('Error creating user profile:', error);
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // Get user profile
+  app.get("/api/users/:userId", async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const db = getDB();
+      const usersCollection = getUsersCollection(db);
+
+      const userProfile = await usersCollection.findOne({ userId });
+      if (!userProfile) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+      }
+
+      res.json({ success: true, data: userProfile });
+    } catch (error) {
+      console.error('Error fetching user profile:', error);
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // Update user profile
+  app.put("/api/users/:userId", async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const updateData = req.body;
+
+      // Remove userId and timestamps from update data
+      delete updateData.userId;
+      delete updateData._id;
+      delete updateData.createdAt;
+
+      const db = getDB();
+      const usersCollection = getUsersCollection(db);
+
+      const result = await usersCollection.updateOne(
+        { userId },
+        {
+          $set: {
+            ...updateData,
+            updatedAt: new Date()
+          }
+        }
+      );
+
+      if (result.matchedCount === 0) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+      }
+
+      console.log(`✅ User profile updated: ${userId}`);
+      res.json({ success: true, message: 'Profile updated successfully' });
+    } catch (error) {
+      console.error('Error updating user profile:', error);
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // Delete user profile
+  app.delete("/api/users/:userId", async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const db = getDB();
+      const usersCollection = getUsersCollection(db);
+
+      const result = await usersCollection.deleteOne({ userId });
+
+      if (result.deletedCount === 0) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+      }
+
+      console.log(`✅ User profile deleted: ${userId}`);
+      res.json({ success: true, message: 'Profile deleted successfully' });
+    } catch (error) {
+      console.error('Error deleting user profile:', error);
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // ==================== ALERT ENDPOINTS ====================
+
+  // Create/Start an alert
+  app.post("/api/alerts", async (req, res) => {
+    try {
+      const { walkId, userId, location } = req.body;
+
+      if (!walkId || !userId) {
+        return res.status(400).json({ success: false, error: 'Missing required fields' });
+      }
+
+      const db = getDB();
+      const alertsCollection = getAlertsCollection(db);
+
+      const alert = {
+        walkId,
+        userId,
+        status: 'active' as const,
+        shadowModeActive: true,
+        location: location || null,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      const result = await alertsCollection.insertOne(alert);
+      console.log(`🚨 Alert created: ${walkId} for user ${userId}`);
+      res.json({ success: true, alertId: result.insertedId });
+    } catch (error) {
+      console.error('Error creating alert:', error);
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // Cancel an alert
+  app.post("/api/cancel-alert", async (req, res) => {
+    const { walkId, userId } = req.body;
     console.log(`Cancelling alert for walkId: ${walkId}`);
 
-    if (activeAlerts[walkId]) {
-      activeAlerts[walkId].status = 'cancelled';
-      activeAlerts[walkId].shadowModeActive = false;
+    try {
+      const db = getDB();
+      const alertsCollection = getAlertsCollection(db);
+      
+      const result = await alertsCollection.updateOne(
+        { walkId },
+        { 
+          $set: { 
+            status: 'cancelled', 
+            shadowModeActive: false,
+            updatedAt: new Date()
+          } 
+        },
+        { upsert: true }
+      );
+
+      // In a real app, we'd send SMS here
+      console.log(`✅ SAAHAS UPDATE: User confirmed they are safe. No further action is needed. Thank you for being there.`);
+
+      res.json({ success: true, acknowledged: result.acknowledged });
+    } catch (error) {
+      console.error('Error cancelling alert:', error);
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
     }
-
-    // In a real app, we'd send SMS here
-    console.log(`✅ SAAHAS UPDATE: [Name] has confirmed they are safe. No further action is needed. Thank you for being there.`);
-
-    res.json({ success: true });
   });
+
+  // Get alert details
+  app.get("/api/alerts/:walkId", async (req, res) => {
+    try {
+      const { walkId } = req.params;
+      const db = getDB();
+      const alertsCollection = getAlertsCollection(db);
+
+      const alert = await alertsCollection.findOne({ walkId });
+      if (!alert) {
+        return res.status(404).json({ success: false, error: 'Alert not found' });
+      }
+
+      res.json({ success: true, data: alert });
+    } catch (error) {
+      console.error('Error fetching alert:', error);
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // Get all alerts for a user
+  app.get("/api/users/:userId/alerts", async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const db = getDB();
+      const alertsCollection = getAlertsCollection(db);
+
+      const alerts = await alertsCollection.find({ userId }).toArray();
+      res.json({ success: true, data: alerts });
+    } catch (error) {
+      console.error('Error fetching alerts:', error);
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // ==================== VITE MIDDLEWARE ====================
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {

@@ -266,7 +266,7 @@ export default function App() {
   const [pinTimeout, setPinTimeout] = useState(60);
   const [walkSummary, setWalkSummary] = useState({
     duration: '00:00',
-    distance: '0.0 km',
+    distance: '0.00 km',
     gaitEvents: 'None detected',
     alertsSent: 'None',
     steps: '0'
@@ -300,6 +300,7 @@ export default function App() {
   const [gaitPattern, setGaitPattern] = useState('steady');
   const [lastGpsCoords, setLastGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [stepCount, setStepCount] = useState(0);  
+  const stepCountRef = useRef(0);
   const [activeContacts, setActiveContacts] = useState<{name?: string; contact1?: string; contact2?: string}>({});
   const breadcrumbs = useRef<{ lat: number; lng: number; time: number }[]>([]);
 
@@ -311,6 +312,27 @@ export default function App() {
   };
 
   const activeContactCount = [activeContacts.contact1, activeContacts.contact2].filter(Boolean).length;
+
+  const averageStepLengthMeters = 0.78;
+
+  const formatDistanceFromSteps = (steps: number) => {
+    const distanceKm = (steps * averageStepLengthMeters) / 1000;
+    return `${distanceKm.toFixed(2)} km`;
+  };
+
+  const buildWalkSummary = (steps: number = stepCountRef.current) => ({
+    duration: formatTime(Math.max(totalTime - timeLeft, 0)),
+    distance: formatDistanceFromSteps(steps),
+    gaitEvents: 'None detected',
+    alertsSent: 'None',
+    steps: steps.toString()
+  });
+
+  const completeWalkTransition = (steps: number) => {
+    setWalkSummary(buildWalkSummary(steps));
+    setIsAlertActive(false);
+    setCurrentScreen('walk-complete');
+  };
 
   // Send Alert Notifications
   const sendAlertNotifications = async () => {
@@ -466,7 +488,7 @@ export default function App() {
     }
   };
 
-  const handlePinInput = async (digit: string) => {
+  const handlePinInput = (digit: string) => {
     if (pinAttempt.length < 4 && !pinError) {
       const newAttempt = [...pinAttempt, digit];
       setPinAttempt(newAttempt);
@@ -475,37 +497,42 @@ export default function App() {
         const correctPin = guestData.pin.join('') || profileData.pin.join('');
         if (newAttempt.join('') === correctPin) {
           if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
-          
-          // End walk safely
-          try {
-            await endActiveWalk();
-            
-            // Stop GPS worker
-            if (gpsWorker.current) {
-              gpsWorker.current.postMessage({ type: 'STOP_GPS_TRACKING' });
-              gpsWorker.current.terminate();
-              gpsWorker.current = null;
+
+          const finalStepCount = stepCountRef.current;
+          completeWalkTransition(finalStepCount);
+          setPinAttempt([]);
+          setPinError(false);
+          setPinTimeout(60);
+
+          void (async () => {
+            try {
+              await endActiveWalk();
+
+              // Stop GPS worker
+              if (gpsWorker.current) {
+                gpsWorker.current.postMessage({ type: 'STOP_GPS_TRACKING' });
+                gpsWorker.current.terminate();
+                gpsWorker.current = null;
+              }
+
+              // Send confirmation to server
+              if (walkId) {
+                await fetch('/api/cancel-alert', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    walkId,
+                    userId: profileData.userId || guestData.name,
+                    status: 'completed'
+                  })
+                }).catch(() => console.log('⏳ Will sync when online'));
+              }
+
+              console.log('✅ Walk completed safely');
+            } catch (error) {
+              console.error('Error ending walk:', error);
             }
-            
-            // Send confirmation to server
-            if (walkId) {
-              await fetch('/api/cancel-alert', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  walkId,
-                  userId: profileData.userId || guestData.name,
-                  status: 'completed'
-                })
-              }).catch(() => console.log('⏳ Will sync when online'));
-            }
-            
-            console.log('✅ Walk completed safely');
-          } catch (error) {
-            console.error('Error ending walk:', error);
-          }
-          
-          setTimeout(() => setCurrentScreen('walk-complete'), 500);
+          })();
         } else {
           setPinError(true);
           if (navigator.vibrate) navigator.vibrate(500);
@@ -533,22 +560,21 @@ export default function App() {
           setAlertCancelPinSuccess(true);
           setAlertCancelPinError(null);
           if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
-          
+
+          const finalStepCount = stepCountRef.current;
+          completeWalkTransition(finalStepCount);
+          setShowAlertCancelModal(false);
+          setAlertCancelPinAttempt('');
+          setAlertCancelPinSuccess(false);
+          setAlertCancelWrongAttempts(0);
+          setAlertTriggerReason(null);
+
           // Call API
-          fetch('/api/cancel-alert', {
+          void fetch('/api/cancel-alert', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ walkId })
           }).catch(err => console.error('Failed to cancel alert:', err));
-
-          setTimeout(() => {
-            setShowAlertCancelModal(false);
-            setCurrentScreen('walk-complete');
-            // Reset state
-            setAlertCancelPinAttempt('');
-            setAlertCancelPinSuccess(false);
-            setAlertCancelWrongAttempts(0);
-          }, 2000);
         } else {
           const newWrongAttempts = alertCancelWrongAttempts + 1;
           setAlertCancelWrongAttempts(newWrongAttempts);
@@ -710,7 +736,6 @@ export default function App() {
       if (accelBuffer.current.length >= 3) {
         const current = accelBuffer.current[accelBuffer.current.length - 1];
         const previous = accelBuffer.current[accelBuffer.current.length - 2];
-        const prevPrevious = accelBuffer.current[accelBuffer.current.length - 3];
         
         // Detect peak: current > previous AND current > next would be detected
         // For now, detect when acceleration crosses above threshold (~3.5 m/s²)
@@ -720,9 +745,11 @@ export default function App() {
         const MIN_STEP_INTERVAL = 300; // ms - minimum time between steps
         
         if (current > STEP_THRESHOLD && previous < STEP_THRESHOLD && (now - lastStepTime.current) > MIN_STEP_INTERVAL) {
-          setStepCount(prev => prev + 1);
+          const nextStepCount = stepCountRef.current + 1;
+          stepCountRef.current = nextStepCount;
+          setStepCount(nextStepCount);
+          console.log(`👟 Step detected! Total steps: ${nextStepCount}`);
           lastStepTime.current = now;
-          console.log(`👟 Step detected! Total steps: ${stepCount + 1}`);
         }
       }
     };
@@ -731,7 +758,7 @@ export default function App() {
       window.addEventListener('devicemotion', handleAccel);
       return () => window.removeEventListener('devicemotion', handleAccel);
     }
-  }, [currentScreen, stepCount]);
+  }, [currentScreen]);
 
   // App Close/Visibility Detection
   useEffect(() => {
@@ -891,14 +918,7 @@ export default function App() {
       if (enteredPin === actualCorrectPin) {
         // Success
         setIsPinModalOpen(false);
-        setWalkSummary({
-          duration: formatTime(totalTime - timeLeft),
-          distance: (Math.random() * (1.5 - 0.5) + 0.5).toFixed(1) + ' km', // Simulated distance
-          gaitEvents: 'None detected',
-          alertsSent: 'None',
-          steps: stepCount.toString()
-        });
-        setCurrentScreen('walk-complete');
+        completeWalkTransition(stepCountRef.current);
         setConfirmationPin(['', '', '', '']);
         setPinTimeout(60);
       } else {
@@ -928,6 +948,7 @@ export default function App() {
 
       // Reset step counter for new walk
       setStepCount(0);
+      stepCountRef.current = 0;
       lastStepTime.current = 0;
 
       // Save active walk to IndexedDB

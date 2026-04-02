@@ -8,6 +8,81 @@ import { motion, AnimatePresence } from 'motion/react';
 import React, { useState, useEffect, useRef } from 'react';
 
 type Screen = 'landing' | 'guest-setup' | 'profile-setup' | 'active-walk' | 'walk-complete' | 'fake-call' | 'alert-sent' | 'pin-confirm' | 'shadow-mode' | 'fake-call-pin-confirm';
+type GaitBadgeStatus = 'active' | 'anomaly' | 'unavailable';
+type GaitAlertType = 'person_fell' | 'phone_fallen' | 'struggle_detected' | 'sudden_stop' | 'extreme_deviation' | 'prolonged_still';
+
+type GaitReading = {
+  time: number;
+  x: number;
+  y: number;
+  z: number;
+  magnitude: number;
+  rotationAlpha: number;
+  rotationBeta: number;
+  rotationGamma: number;
+  interval: number;
+};
+
+type GaitBaseline = {
+  avg: number;
+  std: number;
+  min: number;
+  max: number;
+  stepsPerMinute: number;
+  upperThreshold: number;
+  lowerThreshold: number;
+  rawSamples: number;
+};
+
+type LiveLocationPoint = {
+  lat: number;
+  lng: number;
+  time: number;
+  label?: string;
+};
+
+type ShadowAlertStatus = {
+  status: 'idle' | 'waiting_ack' | 'acknowledged' | 'shadow_active' | 'cancelled';
+  shadowModeActive: boolean;
+  automaticSosTriggered: boolean;
+  ackDeadlineAt: number | null;
+  acknowledgedAt: number | null;
+  acknowledgedBy: string | null;
+  nearbyUsersNotified: number;
+};
+
+type GaitDataStore = {
+  readings: GaitReading[];
+  baselineMagnitudes: number[];
+  baseline: GaitBaseline | null;
+  isBaselineReady: boolean;
+  anomalyStartTime: number | null;
+  anomalyActive: boolean;
+  lastReadingTime: number | null;
+  phoneStillCount: number;
+  fallDetected: boolean;
+  struggleDetected: boolean;
+  readingCount: number;
+  anomalyType: GaitAlertType | null;
+};
+
+type SaahasRuntime = {
+  walk: {
+    gaitData: GaitDataStore | null;
+    gaitStartTime: number | null;
+    gaitListener: ((event: DeviceMotionEvent) => void) | null;
+    gaitListenerAttached: boolean;
+    gaitPaused: boolean;
+  };
+  alert: {
+    fired: boolean;
+    trigger: string | null;
+    gaitType: GaitAlertType | null;
+    gaitReason: string | null;
+    gaitData: Record<string, unknown> | null;
+    messageBody: string | null;
+  };
+};
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('landing');
@@ -20,45 +95,54 @@ export default function App() {
   const [fakeCallPinAttempt, setFakeCallPinAttempt] = useState('');
   const [fakeCallPinError, setFakeCallPinError] = useState(false);
   const [fakeCallPinSuccess, setFakeCallPinSuccess] = useState(false);
+  const [fakeCallWrongPinBufferActive, setFakeCallWrongPinBufferActive] = useState(false);
+  const [fakeCallWrongPinTimer, setFakeCallWrongPinTimer] = useState(30);
   const [alertTriggerReason, setAlertTriggerReason] = useState<string | null>(null);
   const fakeCallAlertTimeout = useRef<NodeJS.Timeout | null>(null);
   const fakeCallPinInterval = useRef<NodeJS.Timeout | null>(null);
+  const fakeCallPinResetTimeout = useRef<NodeJS.Timeout | null>(null);
+  const fakeCallPinSuccessTimeout = useRef<NodeJS.Timeout | null>(null);
   const ringtoneOscillator = useRef<OscillatorNode | null>(null);
   const audioCtx = useRef<AudioContext | null>(null);
-  // Shadow Mode Simulation Logic
+  const [shadowAlertStatus, setShadowAlertStatus] = useState<ShadowAlertStatus>({
+    status: 'idle',
+    shadowModeActive: false,
+    automaticSosTriggered: false,
+    ackDeadlineAt: null,
+    acknowledgedAt: null,
+    acknowledgedBy: null,
+    nearbyUsersNotified: 0,
+  });
   useEffect(() => {
-    if (currentScreen === 'shadow-mode') {
-      setGuardianStatus('searching');
-      setGuardianAcknowledged(false);
-      setShadowModeSearchTime(0);
-
-      const searchInterval = setInterval(() => {
-        setShadowModeSearchTime(prev => prev + 1);
-      }, 1000);
-
-      // Simulate finding a guardian after 5 seconds
-      const findTimeout = setTimeout(() => {
-        setGuardianStatus('found');
-      }, 5000);
-
-      // Simulate guardian acknowledging after 10 seconds
-      const acknowledgeTimeout = setTimeout(() => {
-        setGuardianAcknowledged(true);
-      }, 10000);
-
-      // Simulate "Not Found" after 2 minutes (120 seconds)
-      const notFoundTimeout = setTimeout(() => {
-        setGuardianStatus('not-found');
-      }, 120000);
-
-      return () => {
-        clearInterval(searchInterval);
-        clearTimeout(findTimeout);
-        clearTimeout(acknowledgeTimeout);
-        clearTimeout(notFoundTimeout);
-      };
+    if (currentScreen !== 'shadow-mode') {
+      return;
     }
-  }, [currentScreen]);
+
+    if (shadowAlertStatus.status === 'acknowledged') {
+      setGuardianStatus('found');
+      setGuardianAcknowledged(true);
+      return;
+    }
+
+    if (shadowAlertStatus.status === 'shadow_active') {
+      const nearbyUsersFound = shadowAlertStatus.nearbyUsersNotified > 0;
+      setGuardianStatus(nearbyUsersFound ? 'found' : 'not-found');
+      setGuardianAcknowledged(nearbyUsersFound);
+      return;
+    }
+
+    setGuardianStatus('searching');
+    setGuardianAcknowledged(false);
+    setShadowModeSearchTime(0);
+
+    const searchInterval = setInterval(() => {
+      setShadowModeSearchTime(prev => prev + 1);
+    }, 1000);
+
+    return () => {
+      clearInterval(searchInterval);
+    };
+  }, [currentScreen, shadowAlertStatus]);
 
   // Ringtone Logic
   const playRingtone = () => {
@@ -141,26 +225,51 @@ export default function App() {
       setFakeCallPinAttempt('');
       setFakeCallPinError(false);
       setFakeCallPinSuccess(false);
-
-      fakeCallPinInterval.current = setInterval(() => {
-        setFakeCallPinTimer((prev) => {
-          if (prev <= 1) {
-            clearInterval(fakeCallPinInterval.current!);
-            if (navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
-            setAlertTriggerReason('Safety check failed after fake call');
-            setCurrentScreen('alert-sent');
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
+      setFakeCallWrongPinBufferActive(false);
+      setFakeCallWrongPinTimer(30);
+      if (fakeCallPinResetTimeout.current) clearTimeout(fakeCallPinResetTimeout.current);
+      if (fakeCallPinSuccessTimeout.current) clearTimeout(fakeCallPinSuccessTimeout.current);
     } else {
       if (fakeCallPinInterval.current) clearInterval(fakeCallPinInterval.current);
+      if (fakeCallPinResetTimeout.current) clearTimeout(fakeCallPinResetTimeout.current);
+      if (fakeCallPinSuccessTimeout.current) clearTimeout(fakeCallPinSuccessTimeout.current);
     }
     return () => {
       if (fakeCallPinInterval.current) clearInterval(fakeCallPinInterval.current);
+      if (fakeCallPinResetTimeout.current) clearTimeout(fakeCallPinResetTimeout.current);
+      if (fakeCallPinSuccessTimeout.current) clearTimeout(fakeCallPinSuccessTimeout.current);
     };
   }, [currentScreen]);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (currentScreen === 'fake-call-pin-confirm' && fakeCallPinTimer > 0 && !fakeCallPinSuccess) {
+      interval = setInterval(() => {
+        setFakeCallPinTimer((prev) => prev - 1);
+      }, 1000);
+    } else if (currentScreen === 'fake-call-pin-confirm' && fakeCallPinTimer === 0 && !fakeCallPinSuccess && !fakeCallWrongPinBufferActive) {
+      clearFakeCallAlert();
+      if (navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
+      setAlertTriggerReason('fake_call_no_response');
+      setCurrentScreen('alert-sent');
+    }
+    return () => clearInterval(interval);
+  }, [currentScreen, fakeCallPinTimer, fakeCallPinSuccess, fakeCallWrongPinBufferActive]);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (currentScreen === 'fake-call-pin-confirm' && fakeCallWrongPinBufferActive && fakeCallWrongPinTimer > 0 && !fakeCallPinSuccess) {
+      interval = setInterval(() => {
+        setFakeCallWrongPinTimer((prev) => prev - 1);
+      }, 1000);
+    } else if (currentScreen === 'fake-call-pin-confirm' && fakeCallWrongPinBufferActive && fakeCallWrongPinTimer === 0 && !fakeCallPinSuccess) {
+      clearFakeCallAlert();
+      if (navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
+      setAlertTriggerReason('fake_call_wrong_pin');
+      setCurrentScreen('alert-sent');
+    }
+    return () => clearInterval(interval);
+  }, [currentScreen, fakeCallWrongPinBufferActive, fakeCallWrongPinTimer, fakeCallPinSuccess]);
 
   const handleFakeCallPinInput = (digit: string) => {
     if (fakeCallPinAttempt.length < 4 && !fakeCallPinError && !fakeCallPinSuccess) {
@@ -170,18 +279,30 @@ export default function App() {
       if (newAttempt.length === 4) {
         const correctPin = guestData.pin.join('') || profileData.pin.join('');
         if (newAttempt === correctPin) {
+          if (fakeCallPinResetTimeout.current) clearTimeout(fakeCallPinResetTimeout.current);
+          if (fakeCallPinSuccessTimeout.current) clearTimeout(fakeCallPinSuccessTimeout.current);
+          clearFakeCallAlert();
           setFakeCallPinSuccess(true);
+          setFakeCallPinError(false);
+          setFakeCallWrongPinBufferActive(false);
+          setAlertTriggerReason(null);
           if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
-          setTimeout(() => {
+          fakeCallPinSuccessTimeout.current = setTimeout(() => {
+            resumeGaitGhost();
             setCurrentScreen('active-walk');
           }, 1000);
         } else {
+          if (fakeCallPinResetTimeout.current) clearTimeout(fakeCallPinResetTimeout.current);
           setFakeCallPinError(true);
-          if (navigator.vibrate) navigator.vibrate(500);
-          setAlertTriggerReason('Safety check failed after fake call');
-          setTimeout(() => {
-            setCurrentScreen('alert-sent');
-          }, 800);
+          if (!fakeCallWrongPinBufferActive) {
+            setFakeCallWrongPinBufferActive(true);
+            setFakeCallWrongPinTimer(30);
+          }
+          if (navigator.vibrate) navigator.vibrate([500]);
+          fakeCallPinResetTimeout.current = setTimeout(() => {
+            setFakeCallPinAttempt('');
+            setFakeCallPinError(false);
+          }, 2000);
         }
       }
     }
@@ -227,12 +348,15 @@ export default function App() {
   const [showSecurityQuestion, setShowSecurityQuestion] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('Profile saved. You\'re protected.');
+  const [loggedInUserName, setLoggedInUserName] = useState('');
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
   const [totalTime, setTotalTime] = useState(0);
   const [startTime, setStartTime] = useState<string>('');
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
   const [confirmationPin, setConfirmationPin] = useState(['', '', '', '']);
   const [pinTimeout, setPinTimeout] = useState(60);
+  const [pinModalWrongPinBufferActive, setPinModalWrongPinBufferActive] = useState(false);
   const [isAlertActive, setIsAlertActive] = useState(false);
   const [walkSummary, setWalkSummary] = useState({
     duration: '00:00',
@@ -262,15 +386,733 @@ export default function App() {
   const [cancelPinAttempt, setCancelPinAttempt] = useState('');
   const [cancelPinTimer, setCancelPinTimer] = useState(30);
   const [cancelPinError, setCancelPinError] = useState(false);
+  const [cancelPinAlertBufferActive, setCancelPinAlertBufferActive] = useState(false);
+  const [cancelPinWrongAttemptCount, setCancelPinWrongAttemptCount] = useState(0);
   const [showActiveToast, setShowActiveToast] = useState(false);
   const [pinAttempt, setPinAttempt] = useState<string[]>([]);
   const [pinConfirmTimer, setPinConfirmTimer] = useState(30);
   const [pinError, setPinError] = useState(false);
+  const [pinBufferActive, setPinBufferActive] = useState(false);
+  const [pinSuccess, setPinSuccess] = useState(false);
+  const [pinWrongAttemptCount, setPinWrongAttemptCount] = useState(0);
   const [showDismissWarning, setShowDismissWarning] = useState(false);
   const breadcrumbs = useRef<{ lat: number; lng: number; time: number }[]>([]);
+  const latestLocationRef = useRef<LiveLocationPoint | null>(null);
+  const lastLocationSyncAt = useRef(0);
   const wakeLock = useRef<any>(null);
   const tapTimeout = useRef<NodeJS.Timeout | null>(null);
   const sosTapTimeout = useRef<NodeJS.Timeout | null>(null);
+  const overdueNotificationSentWalkId = useRef<string | null>(null);
+  const pinErrorResetTimeout = useRef<NodeJS.Timeout | null>(null);
+  const pinSuccessTimeout = useRef<NodeJS.Timeout | null>(null);
+  const cancelPinResetTimeout = useRef<NodeJS.Timeout | null>(null);
+  const alertNotificationSentKey = useRef<string | null>(null);
+  const safeArrivalNotificationSentKey = useRef<string | null>(null);
+  const safeArrivalNotificationPendingKey = useRef<string | null>(null);
+  const pinModalResetTimeout = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const savedLoggedInUserName = localStorage.getItem('saahas_logged_in_profile_name');
+    if (savedLoggedInUserName) {
+      setLoggedInUserName(savedLoggedInUserName);
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (pinModalResetTimeout.current) clearTimeout(pinModalResetTimeout.current);
+    };
+  }, []);
+
+  const getSaahasState = (): SaahasRuntime => {
+    const globalWindow = window as Window & { SAAHAS?: SaahasRuntime };
+
+    if (!globalWindow.SAAHAS) {
+      globalWindow.SAAHAS = {
+        walk: {
+          gaitData: null,
+          gaitStartTime: null,
+          gaitListener: null,
+          gaitListenerAttached: false,
+          gaitPaused: false,
+        },
+        alert: {
+          fired: false,
+          trigger: null,
+          gaitType: null,
+          gaitReason: null,
+          gaitData: null,
+          messageBody: null,
+        },
+      };
+    }
+
+    return globalWindow.SAAHAS;
+  };
+
+  const navigateTo = (screen: Screen) => {
+    setCurrentScreen(screen);
+  };
+
+  const getCurrentUserName = () => guestData.name || profileData.fullName || 'User';
+
+  const getCurrentUserPhone = () => guestData.phone || profileData.phone || '';
+
+  const syncProfileLocation = (location: LiveLocationPoint, currentWalkId?: string | null) => {
+    const userPhone = getCurrentUserPhone();
+    if (!userPhone) return;
+
+    const now = Date.now();
+    if (now - lastLocationSyncAt.current < 15000) return;
+
+    lastLocationSyncAt.current = now;
+
+    fetch('/api/profile/location', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userName: getCurrentUserName(),
+        userPhone,
+        lat: location.lat,
+        lng: location.lng,
+        label: location.label || currentLocation,
+        walkId: currentWalkId || walkId,
+      }),
+    }).catch((error) => {
+      console.error('Profile location sync failed:', error);
+    });
+  };
+
+  const updateGaitBadge = (status: GaitBadgeStatus) => {
+    const badge = document.getElementById('badge-gait');
+    if (!badge) return;
+
+    const badgeLabel = badge.querySelector('[data-gait-label]');
+
+    if (status === 'active') {
+      if (badgeLabel) badgeLabel.textContent = 'Gait Monitor On';
+      badge.style.background = 'rgba(0,200,83,0.12)';
+      badge.style.color = '#00C853';
+      badge.style.borderColor = 'rgba(0,200,83,0.2)';
+    } else if (status === 'anomaly') {
+      if (badgeLabel) badgeLabel.textContent = 'Anomaly Detected';
+      badge.style.background = 'rgba(255,107,0,0.12)';
+      badge.style.color = '#FF6B00';
+      badge.style.borderColor = 'rgba(255,107,0,0.2)';
+    } else {
+      if (badgeLabel) badgeLabel.textContent = 'Gait Unavailable';
+      badge.style.background = 'rgba(136,136,136,0.12)';
+      badge.style.color = '#888888';
+      badge.style.borderColor = 'rgba(136,136,136,0.2)';
+    }
+  };
+
+  const buildMapsLink = (point?: { lat: number; lng: number }) => {
+    if (!point) return 'Unavailable';
+    return `https://maps.google.com/?q=${point.lat},${point.lng}`;
+  };
+
+  const getEmergencyContacts = () => {
+    return [
+      {
+        name: profileData.contact1Name || 'Emergency Contact 1',
+        phone: guestData.contact1 || profileData.contact1Phone,
+      },
+      {
+        name: profileData.contact2Name || 'Emergency Contact 2',
+        phone: guestData.contact2 || profileData.contact2Phone,
+      },
+    ].filter((contact) => Boolean(contact.phone));
+  };
+
+  const getReadableAlertReason = (reason?: string | null) => {
+    const alertReasonMap: Record<string, string> = {
+      fake_call_no_response: 'No response after fake call safety check',
+      fake_call_wrong_pin: 'Wrong PIN detected after fake call',
+      fake_call_hidden_timeout: 'No safety confirmation after fake call',
+      wrong_pin_timeout: 'Safe arrival PIN was not confirmed',
+      back_button_wrong_pin: 'Wrong PIN entered while leaving the walk',
+      walk_timer_buffer_expired: 'Walk timer expired without safe arrival confirmation',
+      pin_confirm_backgrounded: 'Safe arrival confirmation was interrupted',
+      pin_confirm_closed: 'Safe arrival confirmation was closed',
+      manual_sos_triggered: 'Manual SOS was triggered',
+      pin_modal_timeout: 'Safety confirmation PIN timed out',
+      pin_modal_wrong_pin: 'Wrong safety confirmation PIN entered',
+    };
+
+    if (!reason) return 'Emergency alert triggered';
+    return alertReasonMap[reason] || reason;
+  };
+
+  const buildEmergencyAlertMessage = (reasonText: string, detectedBy = 'Saahas Safety App') => {
+    const userName = getCurrentUserName();
+    const currentPoint = latestLocationRef.current || breadcrumbs.current[breadcrumbs.current.length - 1];
+    const twoMinutesAgoPoint = [...breadcrumbs.current].reverse().find((point) => Date.now() - point.time >= 120000);
+    const fourMinutesAgoPoint = [...breadcrumbs.current].reverse().find((point) => Date.now() - point.time >= 240000);
+    const currentLocationLink = buildMapsLink(currentPoint);
+    const twoMinutesAgoLink = buildMapsLink(twoMinutesAgoPoint);
+    const fourMinutesAgoLink = buildMapsLink(fourMinutesAgoPoint);
+
+    return `🚨 SAAHAS ALERT 🚨
+${userName} may be in danger.
+Reason: ${reasonText}
+
+📍 Current location:
+${currentLocationLink === 'Unavailable' ? currentLocation : currentLocationLink}
+
+📍 2 min ago: ${twoMinutesAgoLink}
+📍 4 min ago: ${fourMinutesAgoLink}
+
+⏰ Time: ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+📱 Detected by: ${detectedBy}
+
+Reply YES — I am going to help
+Reply NO — I cannot reach them`;
+  };
+
+  const buildGaitAlertMessage = (gaitReason: string) => {
+    return buildEmergencyAlertMessage(gaitReason, 'Gait Monitor');
+  };
+
+  function calculateBaseline(magnitudes: number[]): GaitBaseline {
+    const avg = magnitudes.reduce((a, b) => a + b, 0) / magnitudes.length;
+    const squareDiffs = magnitudes.map(v => Math.pow(v - avg, 2));
+    const avgSquareDiff = squareDiffs.reduce((a, b) => a + b, 0) / squareDiffs.length;
+    const std = Math.sqrt(avgSquareDiff);
+    const min = Math.min(...magnitudes);
+    const max = Math.max(...magnitudes);
+
+    let stepCount = 0;
+    for (let i = 1; i < magnitudes.length; i++) {
+      if (magnitudes[i] > avg + std && magnitudes[i - 1] <= avg + std) {
+        stepCount++;
+      }
+    }
+
+    return {
+      avg,
+      std,
+      min,
+      max,
+      stepsPerMinute: stepCount,
+      upperThreshold: avg + (std * 3),
+      lowerThreshold: Math.max(avg - (std * 3), 0.5),
+      rawSamples: magnitudes.length,
+    };
+  }
+
+  function stopGaitGhost() {
+    const saahas = getSaahasState();
+
+    if (saahas.walk.gaitListener && saahas.walk.gaitListenerAttached) {
+      window.removeEventListener('devicemotion', saahas.walk.gaitListener);
+    }
+
+    saahas.walk.gaitListener = null;
+    saahas.walk.gaitListenerAttached = false;
+    saahas.walk.gaitPaused = false;
+
+    if (saahas.walk.gaitData) {
+      saahas.walk.gaitData.anomalyActive = false;
+      saahas.walk.gaitData.anomalyStartTime = null;
+      saahas.walk.gaitData.anomalyType = null;
+    }
+
+    updateGaitBadge('unavailable');
+    console.log('Gait Ghost: Stopped and cleaned up');
+  }
+
+  function fireGaitAlert(anomalyType: GaitAlertType, data: Record<string, unknown>) {
+    const saahas = getSaahasState();
+
+    if (saahas.alert.fired) return;
+    saahas.alert.fired = true;
+
+    const triggerReasons: Record<GaitAlertType, string> = {
+      person_fell: 'A fall was detected',
+      phone_fallen: 'Phone drop detected',
+      struggle_detected: 'Unusual movement detected',
+      sudden_stop: 'Sudden stop detected',
+      extreme_deviation: 'Abnormal movement pattern',
+      prolonged_still: 'No movement detected',
+    };
+
+    const gaitReason = triggerReasons[anomalyType];
+    saahas.alert.trigger = 'gait_ghost';
+    saahas.alert.gaitType = anomalyType;
+    saahas.alert.gaitReason = gaitReason;
+    saahas.alert.gaitData = data;
+    saahas.alert.messageBody = buildGaitAlertMessage(gaitReason);
+
+    console.error('Gait Ghost: ALERT FIRING', {
+      type: anomalyType,
+      reason: gaitReason,
+      data,
+    });
+
+    stopGaitGhost();
+
+    if (navigator.vibrate) {
+      navigator.vibrate([300, 100, 300, 100, 300]);
+    }
+
+    setIsAlertActive(true);
+    setAlertTriggerReason(gaitReason);
+    navigateTo('alert-sent');
+  }
+
+  function detectAllAnomalies(reading: GaitReading, gaitData: GaitDataStore) {
+    const baseline = gaitData.baseline;
+    if (!baseline) return;
+
+    const now = reading.time;
+    const mag = reading.magnitude;
+    const x = reading.x;
+    const y = reading.y;
+    const z = reading.z;
+
+    const isSuddenStop = (
+      mag < 1.2 &&
+      baseline.avg > 4.0
+    );
+
+    const isViolentStruggle = (
+      mag > baseline.upperThreshold &&
+      mag > 25
+    );
+
+    const isPhoneFallen = (
+      Math.abs(z) > 8.5 &&
+      Math.abs(x) < 2.5 &&
+      Math.abs(y) < 2.5
+    );
+
+    const recentReadings = gaitData.readings.slice(-30);
+    const recentAvg = recentReadings.length
+      ? recentReadings.reduce((a, b) => a + b.magnitude, 0) / recentReadings.length
+      : mag;
+
+    const isPersonFell = (
+      mag > 35 &&
+      recentAvg < 3.0
+    );
+
+    const isExtremeDeviation = (
+      mag > baseline.avg + (baseline.std * 5)
+    );
+
+    const isPhoneStill = mag < 0.5;
+    if (isPhoneStill) {
+      gaitData.phoneStillCount++;
+    } else {
+      gaitData.phoneStillCount = 0;
+    }
+
+    const isProblematicStill = gaitData.phoneStillCount > 750;
+    const anomalyDetected = (
+      isSuddenStop ||
+      isViolentStruggle ||
+      isPhoneFallen ||
+      isPersonFell ||
+      isExtremeDeviation ||
+      isProblematicStill
+    );
+
+    let anomalyType: GaitAlertType | null = null;
+    if (isPersonFell) anomalyType = 'person_fell';
+    else if (isPhoneFallen) anomalyType = 'phone_fallen';
+    else if (isViolentStruggle) anomalyType = 'struggle_detected';
+    else if (isSuddenStop) anomalyType = 'sudden_stop';
+    else if (isExtremeDeviation) anomalyType = 'extreme_deviation';
+    else if (isProblematicStill) anomalyType = 'prolonged_still';
+
+    gaitData.fallDetected = isPersonFell;
+    gaitData.struggleDetected = isViolentStruggle;
+
+    if (anomalyDetected && anomalyType) {
+      if (!gaitData.anomalyActive) {
+        gaitData.anomalyActive = true;
+        gaitData.anomalyStartTime = now;
+        gaitData.anomalyType = anomalyType;
+        updateGaitBadge('anomaly');
+
+        console.warn('Gait Ghost: Anomaly started', anomalyType, {
+          magnitude: mag,
+          baseline: baseline.avg,
+          x,
+          y,
+          z,
+        });
+      } else if (gaitData.anomalyStartTime !== null) {
+        const anomalyDuration = now - gaitData.anomalyStartTime;
+
+        if (isPersonFell && anomalyDuration > 2000) {
+          fireGaitAlert('person_fell', {
+            magnitude: mag,
+            duration: anomalyDuration,
+            x,
+            y,
+            z,
+          });
+          return;
+        }
+
+        const activeAnomalyType = gaitData.anomalyType || anomalyType;
+        const requiredDuration =
+          activeAnomalyType === 'phone_fallen'
+            ? 60000
+            : 15000;
+
+        if (anomalyDuration >= requiredDuration) {
+          fireGaitAlert(activeAnomalyType, {
+            magnitude: mag,
+            duration: anomalyDuration,
+            x,
+            y,
+            z,
+          });
+        }
+      }
+    } else if (gaitData.anomalyActive) {
+      console.log('Gait Ghost: Anomaly cleared after', now - (gaitData.anomalyStartTime || now), 'ms');
+      gaitData.anomalyActive = false;
+      gaitData.anomalyStartTime = null;
+      gaitData.anomalyType = null;
+      updateGaitBadge('active');
+    }
+  }
+
+  function initGaitMonitor() {
+    const saahas = getSaahasState();
+    const gaitData: GaitDataStore = {
+      readings: [],
+      baselineMagnitudes: [],
+      baseline: null,
+      isBaselineReady: false,
+      anomalyStartTime: null,
+      anomalyActive: false,
+      lastReadingTime: null,
+      phoneStillCount: 0,
+      fallDetected: false,
+      struggleDetected: false,
+      readingCount: 0,
+      anomalyType: null,
+    };
+
+    saahas.walk.gaitData = gaitData;
+    saahas.walk.gaitStartTime = Date.now();
+    saahas.walk.gaitPaused = false;
+
+    const handleMotion = (event: DeviceMotionEvent) => {
+      const acc = event.accelerationIncludingGravity;
+      if (!acc || acc.x === null || acc.y === null || acc.z === null) {
+        return;
+      }
+
+      const now = Date.now();
+      const x = acc.x || 0;
+      const y = acc.y || 0;
+      const z = acc.z || 0;
+      const magnitude = Math.sqrt(x * x + y * y + z * z);
+      const rotation = event.rotationRate || { alpha: 0, beta: 0, gamma: 0 };
+
+      const reading: GaitReading = {
+        time: now,
+        x: parseFloat(x.toFixed(3)),
+        y: parseFloat(y.toFixed(3)),
+        z: parseFloat(z.toFixed(3)),
+        magnitude: parseFloat(magnitude.toFixed(3)),
+        rotationAlpha: rotation.alpha || 0,
+        rotationBeta: rotation.beta || 0,
+        rotationGamma: rotation.gamma || 0,
+        interval: event.interval || 0,
+      };
+
+      gaitData.lastReadingTime = now;
+      gaitData.readingCount++;
+      gaitData.readings.push(reading);
+
+      if (gaitData.readings.length > 300) {
+        gaitData.readings.shift();
+      }
+
+      const walkAge = now - (saahas.walk.gaitStartTime || now);
+
+      if (walkAge < 60000) {
+        gaitData.baselineMagnitudes.push(magnitude);
+        return;
+      }
+
+      if (!gaitData.isBaselineReady && gaitData.baselineMagnitudes.length > 0) {
+        gaitData.baseline = calculateBaseline(gaitData.baselineMagnitudes);
+        gaitData.isBaselineReady = true;
+        console.log('Gait Ghost: Baseline ready', gaitData.baseline);
+      }
+
+      if (gaitData.isBaselineReady) {
+        detectAllAnomalies(reading, gaitData);
+      }
+    };
+
+    window.addEventListener('devicemotion', handleMotion);
+    saahas.walk.gaitListener = handleMotion;
+    saahas.walk.gaitListenerAttached = true;
+  }
+
+  function pauseGaitGhost() {
+    const saahas = getSaahasState();
+
+    if (saahas.walk.gaitListener && saahas.walk.gaitListenerAttached) {
+      window.removeEventListener('devicemotion', saahas.walk.gaitListener);
+      saahas.walk.gaitListenerAttached = false;
+      saahas.walk.gaitPaused = true;
+    }
+
+    updateGaitBadge('unavailable');
+    console.log('Gait Ghost: Paused for fake call');
+  }
+
+  function resumeGaitGhost() {
+    const saahas = getSaahasState();
+
+    if (!saahas.walk.gaitListener) {
+      startGaitGhost();
+      return;
+    }
+
+    if (!saahas.walk.gaitListenerAttached) {
+      window.addEventListener('devicemotion', saahas.walk.gaitListener);
+      saahas.walk.gaitListenerAttached = true;
+    }
+
+    saahas.walk.gaitPaused = false;
+    updateGaitBadge(saahas.walk.gaitData?.anomalyActive ? 'anomaly' : 'active');
+    console.log('Gait Ghost: Resumed after fake call');
+  }
+
+  function startGaitGhost() {
+    const saahas = getSaahasState();
+
+    if (saahas.walk.gaitListener && saahas.walk.gaitPaused) {
+      resumeGaitGhost();
+      return;
+    }
+
+    if (saahas.walk.gaitListenerAttached) {
+      updateGaitBadge(saahas.walk.gaitData?.anomalyActive ? 'anomaly' : 'active');
+      return;
+    }
+
+    if (typeof DeviceMotionEvent === 'undefined') {
+      updateGaitBadge('unavailable');
+      console.warn('Gait Ghost: Device motion unavailable');
+      return;
+    }
+
+    const motionEvent = DeviceMotionEvent as typeof DeviceMotionEvent & {
+      requestPermission?: () => Promise<'granted' | 'denied'>;
+    };
+
+    if (typeof motionEvent.requestPermission === 'function') {
+      motionEvent.requestPermission()
+        .then(permission => {
+          if (permission === 'granted') {
+            initGaitMonitor();
+            updateGaitBadge('active');
+          } else {
+            updateGaitBadge('unavailable');
+            console.warn('Gait Ghost: Permission denied by user');
+          }
+        })
+        .catch(err => {
+          updateGaitBadge('unavailable');
+          console.warn('Gait Ghost: Permission error', err);
+        });
+    } else {
+      initGaitMonitor();
+      updateGaitBadge('active');
+    }
+  }
+
+  useEffect(() => {
+    getSaahasState();
+
+    return () => {
+      stopGaitGhost();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (currentScreen === 'fake-call') {
+      pauseGaitGhost();
+      return;
+    }
+
+    if (currentScreen === 'active-walk') {
+      startGaitGhost();
+      return;
+    }
+
+    if (currentScreen === 'landing' || currentScreen === 'walk-complete' || currentScreen === 'alert-sent') {
+      stopGaitGhost();
+    }
+  }, [currentScreen]);
+
+  useEffect(() => {
+    if (currentScreen !== 'alert-sent') {
+      alertNotificationSentKey.current = null;
+      return;
+    }
+
+    const emergencyContacts = getEmergencyContacts();
+    if (emergencyContacts.length === 0) {
+      return;
+    }
+
+    const saahas = getSaahasState();
+    const readableReason = getReadableAlertReason(alertTriggerReason || saahas.alert.gaitReason || saahas.alert.trigger);
+    const message = saahas.alert.messageBody || buildEmergencyAlertMessage(
+      readableReason,
+      saahas.alert.trigger === 'gait_ghost' ? 'Gait Monitor' : 'Saahas Safety App'
+    );
+    const alertKey = `${walkId || 'no-walk'}:${saahas.alert.trigger || alertTriggerReason || 'emergency_alert'}`;
+    if (alertNotificationSentKey.current === alertKey) {
+      return;
+    }
+
+    fetch('/api/notify-emergency-alert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userName: getCurrentUserName(),
+        userPhone: getCurrentUserPhone(),
+        emergencyContacts,
+        walkId,
+        alertReason: readableReason,
+        message,
+        latestLocation: latestLocationRef.current,
+      })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data?.ackDeadlineAt) {
+          setShadowAlertStatus({
+            status: 'waiting_ack',
+            shadowModeActive: false,
+            automaticSosTriggered: false,
+            ackDeadlineAt: data.ackDeadlineAt,
+            acknowledgedAt: null,
+            acknowledgedBy: null,
+            nearbyUsersNotified: 0,
+          });
+        }
+        console.log('WhatsApp emergency alert sent:', data);
+      })
+      .catch(err => {
+        alertNotificationSentKey.current = null;
+        console.error('WhatsApp emergency alert failed:', err);
+      });
+
+    alertNotificationSentKey.current = alertKey;
+    saahas.alert.trigger = saahas.alert.trigger || alertTriggerReason || 'emergency_alert';
+    saahas.alert.messageBody = message;
+  }, [currentScreen, walkId, alertTriggerReason, guestData.name, guestData.phone, guestData.contact1, guestData.contact2, profileData.fullName, profileData.phone, profileData.contact1Name, profileData.contact1Phone, profileData.contact2Name, profileData.contact2Phone, currentLocation]);
+
+  useEffect(() => {
+    if (currentScreen !== 'walk-complete') {
+      safeArrivalNotificationPendingKey.current = null;
+      return;
+    }
+
+    const safeArrivalKey = `${walkId || 'no-walk'}:safe-arrival`;
+    if (safeArrivalNotificationPendingKey.current !== safeArrivalKey) {
+      return;
+    }
+
+    if (safeArrivalNotificationSentKey.current === safeArrivalKey) {
+      return;
+    }
+
+    const emergencyContacts = getEmergencyContacts();
+    if (emergencyContacts.length === 0) {
+      return;
+    }
+
+    safeArrivalNotificationSentKey.current = safeArrivalKey;
+
+    fetch('/api/notify-safe-arrival', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userName: guestData.name || profileData.fullName,
+        userPhone: guestData.phone || profileData.phone,
+        emergencyContacts,
+        walkId,
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => console.log('WhatsApp safe-arrival notification sent:', data))
+      .catch((err) => {
+        safeArrivalNotificationSentKey.current = null;
+        console.error('WhatsApp safe-arrival notification failed:', err);
+      });
+  }, [currentScreen, walkId, guestData.name, guestData.phone, guestData.contact1, guestData.contact2, profileData.fullName, profileData.phone, profileData.contact1Name, profileData.contact1Phone, profileData.contact2Name, profileData.contact2Phone]);
+
+  useEffect(() => {
+    if (!walkId || (currentScreen !== 'alert-sent' && currentScreen !== 'shadow-mode')) {
+      return;
+    }
+
+    let stopped = false;
+
+    const syncAlertStatus = () => {
+      fetch(`/api/alert-status/${walkId}`)
+        .then((res) => {
+          if (!res.ok) {
+            throw new Error(`Alert status request failed with ${res.status}`);
+          }
+
+          return res.json();
+        })
+        .then((data) => {
+          if (stopped || !data?.alert) {
+            return;
+          }
+
+          const nextStatus: ShadowAlertStatus = {
+            status: data.alert.status || 'idle',
+            shadowModeActive: Boolean(data.alert.shadowModeActive),
+            automaticSosTriggered: Boolean(data.alert.automaticSosTriggered),
+            ackDeadlineAt: data.alert.ackDeadlineAt ?? null,
+            acknowledgedAt: data.alert.acknowledgedAt ?? null,
+            acknowledgedBy: data.alert.acknowledgedBy ?? null,
+            nearbyUsersNotified: Number(data.alert.nearbyUsersNotified ?? 0),
+          };
+
+          setShadowAlertStatus(nextStatus);
+
+          if (data.alert.latestLocation?.lat !== undefined && data.alert.latestLocation?.lng !== undefined) {
+            latestLocationRef.current = {
+              lat: data.alert.latestLocation.lat,
+              lng: data.alert.latestLocation.lng,
+              time: data.alert.latestLocation.updatedAt || Date.now(),
+              label: data.alert.latestLocation.label,
+            };
+          }
+        })
+        .catch((error) => {
+          console.error('Alert status sync failed:', error);
+        });
+    };
+
+    syncAlertStatus();
+    const pollInterval = setInterval(syncAlertStatus, 5000);
+
+    return () => {
+      stopped = true;
+      clearInterval(pollInterval);
+    };
+  }, [walkId, currentScreen]);
 
   // Timer logic
   useEffect(() => {
@@ -280,11 +1122,36 @@ export default function App() {
         setTimeLeft((prev) => prev - 1);
       }, 1000);
     } else if (timeLeft === 0 && currentScreen === 'active-walk' && !isAlertActive && !isBufferActive) {
+      if (walkId && overdueNotificationSentWalkId.current !== walkId) {
+        overdueNotificationSentWalkId.current = walkId;
+        fetch('/api/notify-walk-overdue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userName: guestData.name || profileData.fullName,
+            userPhone: guestData.phone || profileData.phone,
+            emergencyContacts: [
+              {
+                name: profileData.contact1Name || 'Emergency Contact 1',
+                phone: guestData.contact1 || profileData.contact1Phone,
+              },
+              {
+                name: profileData.contact2Name || 'Emergency Contact 2',
+                phone: guestData.contact2 || profileData.contact2Phone,
+              },
+            ],
+            walkId,
+          })
+        })
+          .then(res => res.json())
+          .then(data => console.log('WhatsApp overdue alert sent:', data))
+          .catch(err => console.error('WhatsApp overdue alert failed:', err));
+      }
       setIsBufferActive(true);
       setBufferTime(30);
     }
     return () => clearInterval(interval);
-  }, [currentScreen, timeLeft, isAlertActive, isBufferActive]);
+  }, [currentScreen, timeLeft, isAlertActive, isBufferActive, guestData.name, guestData.phone, guestData.contact1, guestData.contact2, profileData.fullName, profileData.phone, profileData.contact1Name, profileData.contact1Phone, profileData.contact2Name, profileData.contact2Phone, walkId]);
 
   // Buffer Timer logic
   useEffect(() => {
@@ -295,6 +1162,7 @@ export default function App() {
       }, 1000);
     } else if (isBufferActive && bufferTime === 0 && !isAlertActive) {
       setIsAlertActive(true);
+      setAlertTriggerReason('walk_timer_buffer_expired');
       setCurrentScreen('alert-sent');
     }
     return () => clearInterval(interval);
@@ -303,16 +1171,34 @@ export default function App() {
   // PIN Confirmation Timer logic
   useEffect(() => {
     let interval: NodeJS.Timeout;
-    if (currentScreen === 'pin-confirm' && pinConfirmTimer > 0 && !pinError) {
+    if (currentScreen === 'pin-confirm' && pinBufferActive && pinConfirmTimer > 0 && !pinSuccess) {
       interval = setInterval(() => {
         setPinConfirmTimer((prev) => prev - 1);
       }, 1000);
-    } else if (currentScreen === 'pin-confirm' && pinConfirmTimer === 0 && !pinError) {
+    } else if (currentScreen === 'pin-confirm' && pinBufferActive && pinConfirmTimer === 0 && !pinSuccess) {
+      if (navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
       setIsAlertActive(true);
+      setAlertTriggerReason('wrong_pin_timeout');
       setCurrentScreen('alert-sent');
     }
     return () => clearInterval(interval);
-  }, [currentScreen, pinConfirmTimer, pinError]);
+  }, [currentScreen, pinConfirmTimer, pinBufferActive, pinSuccess]);
+
+  useEffect(() => {
+    if (currentScreen === 'pin-confirm' && pinBufferActive && !pinSuccess) {
+      const handleVisibilityChange = () => {
+        if (document.visibilityState === 'hidden') {
+          if (navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
+          setIsAlertActive(true);
+          setAlertTriggerReason('pin_confirm_backgrounded');
+          setCurrentScreen('alert-sent');
+        }
+      };
+
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }
+  }, [currentScreen, pinBufferActive, pinSuccess]);
 
   // Cancel Walk PIN Timer logic
   useEffect(() => {
@@ -322,12 +1208,30 @@ export default function App() {
         setCancelPinTimer((prev) => prev - 1);
       }, 1000);
     } else if (showCancelModal && cancelPinTimer === 0) {
+      if (cancelPinResetTimeout.current) clearTimeout(cancelPinResetTimeout.current);
       setShowCancelModal(false);
-      setShowActiveToast(true);
-      setTimeout(() => setShowActiveToast(false), 2000);
+      setCancelPinAttempt('');
+      setCancelPinError(false);
+      if (cancelPinAlertBufferActive) {
+        if (navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
+        setCancelPinAlertBufferActive(false);
+        setCancelPinWrongAttemptCount(0);
+        setIsAlertActive(true);
+        setAlertTriggerReason('back_button_wrong_pin');
+        setCurrentScreen('alert-sent');
+      } else {
+        setShowActiveToast(true);
+        setTimeout(() => setShowActiveToast(false), 2000);
+      }
     }
     return () => clearInterval(interval);
-  }, [showCancelModal, cancelPinTimer]);
+  }, [showCancelModal, cancelPinTimer, cancelPinAlertBufferActive]);
+
+  useEffect(() => {
+    return () => {
+      if (cancelPinResetTimeout.current) clearTimeout(cancelPinResetTimeout.current);
+    };
+  }, []);
 
   // Intercept back button
   useEffect(() => {
@@ -337,10 +1241,13 @@ export default function App() {
       const handlePopState = (e: PopStateEvent) => {
         e.preventDefault();
         window.history.pushState(null, '', window.location.href);
+        if (cancelPinResetTimeout.current) clearTimeout(cancelPinResetTimeout.current);
         setShowCancelModal(true);
         setCancelPinTimer(30);
         setCancelPinAttempt('');
         setCancelPinError(false);
+        setCancelPinAlertBufferActive(false);
+        setCancelPinWrongAttemptCount(0);
       };
 
       window.addEventListener('popstate', handlePopState);
@@ -357,25 +1264,36 @@ export default function App() {
         const correctPin = guestData.pin.join('') || profileData.pin.join('');
         if (newAttempt === correctPin) {
           // Success - Cancel Walk
+          if (cancelPinResetTimeout.current) clearTimeout(cancelPinResetTimeout.current);
           setShowCancelModal(false);
+          setCancelPinAttempt('');
+          setCancelPinError(false);
+          setCancelPinAlertBufferActive(false);
+          setCancelPinWrongAttemptCount(0);
+          setCancelPinTimer(30);
           setTimeLeft(0);
           setIsBufferActive(false);
           setIsAlertActive(false);
           setCurrentScreen('landing');
           setAlertTriggerReason(null);
-          setToastMessage('Walk cancelled safely.');
+          setToastMessage('Walk cancelled safely');
           setShowToast(true);
           setTimeout(() => setShowToast(false), 3000);
           // Release WakeLock is handled by useEffect on currentScreen change
         } else {
           // Wrong PIN
+          if (cancelPinResetTimeout.current) clearTimeout(cancelPinResetTimeout.current);
           setCancelPinError(true);
-          if (navigator.vibrate) navigator.vibrate(500);
-          setTimeout(() => {
+          setCancelPinWrongAttemptCount((prev) => prev + 1);
+          if (!cancelPinAlertBufferActive) {
+            setCancelPinAlertBufferActive(true);
+            setCancelPinTimer(30);
+          }
+          if (navigator.vibrate) navigator.vibrate([500]);
+          cancelPinResetTimeout.current = setTimeout(() => {
             setCancelPinAttempt('');
             setCancelPinError(false);
-            setCancelPinTimer(30); // Reset countdown
-          }, 1500);
+          }, 2000);
         }
       }
     }
@@ -388,27 +1306,41 @@ export default function App() {
   };
 
   const handlePinInput = (digit: string) => {
-    if (pinAttempt.length < 4 && !pinError) {
+    if (pinAttempt.length < 4 && !pinError && !pinSuccess) {
       const newAttempt = [...pinAttempt, digit];
       setPinAttempt(newAttempt);
       
       if (newAttempt.length === 4) {
         const correctPin = guestData.pin.join('') || profileData.pin.join('');
         if (newAttempt.join('') === correctPin) {
+          if (pinErrorResetTimeout.current) clearTimeout(pinErrorResetTimeout.current);
+          if (pinSuccessTimeout.current) clearTimeout(pinSuccessTimeout.current);
+          setPinBufferActive(false);
+          setPinError(false);
+          setPinSuccess(true);
+          safeArrivalNotificationPendingKey.current = `${walkId || 'no-walk'}:safe-arrival`;
           if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
-          setTimeout(() => setCurrentScreen('walk-complete'), 500);
+          pinSuccessTimeout.current = setTimeout(() => setCurrentScreen('walk-complete'), 800);
         } else {
+          if (!pinBufferActive) {
+            setPinBufferActive(true);
+            setPinConfirmTimer(30);
+          }
+          if (pinErrorResetTimeout.current) clearTimeout(pinErrorResetTimeout.current);
+          setPinWrongAttemptCount((prev) => prev + 1);
           setPinError(true);
-          if (navigator.vibrate) navigator.vibrate(500);
-          setIsAlertActive(true);
-          setTimeout(() => setCurrentScreen('alert-sent'), 1000);
+          if (navigator.vibrate) navigator.vibrate([500]);
+          pinErrorResetTimeout.current = setTimeout(() => {
+            setPinAttempt([]);
+            setPinError(false);
+          }, 2000);
         }
       }
     }
   };
 
   const handlePinBackspace = () => {
-    if (!pinError) {
+    if (!pinError && !pinSuccess) {
       setPinAttempt(prev => prev.slice(0, -1));
     }
   };
@@ -484,6 +1416,12 @@ export default function App() {
             const { latitude, longitude } = position.coords;
             setGpsStatus('live');
             setLastLocationUpdate(0);
+            latestLocationRef.current = {
+              lat: latitude,
+              lng: longitude,
+              time: Date.now(),
+              label: currentLocation,
+            };
             
             // Breadcrumbs every 60s
             const now = Date.now();
@@ -495,9 +1433,28 @@ export default function App() {
             try {
               const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`);
               const data = await res.json();
-              setCurrentLocation(data.display_name.split(',')[0] + ', ' + (data.address.suburb || data.address.neighbourhood || ''));
+              const label = data.display_name.split(',')[0] + ', ' + (data.address.suburb || data.address.neighbourhood || '');
+              setCurrentLocation(label);
+              latestLocationRef.current = {
+                lat: latitude,
+                lng: longitude,
+                time: now,
+                label,
+              };
+              syncProfileLocation({
+                lat: latitude,
+                lng: longitude,
+                time: now,
+                label,
+              }, walkId);
             } catch (e) {
               console.error("Geocoding failed", e);
+              syncProfileLocation({
+                lat: latitude,
+                lng: longitude,
+                time: now,
+                label: currentLocation,
+              }, walkId);
             }
           },
           (error) => {
@@ -516,7 +1473,7 @@ export default function App() {
       if (watchId) navigator.geolocation.clearWatch(watchId);
       clearInterval(locInterval);
     };
-  }, [currentScreen]);
+  }, [currentScreen, walkId]);
 
   // Wake Lock Logic
   useEffect(() => {
@@ -605,10 +1562,12 @@ export default function App() {
       }, 1000);
     } else if (isPinModalOpen && pinTimeout === 0 && !isAlertActive) {
       setIsAlertActive(true);
+      setAlertTriggerReason(pinModalWrongPinBufferActive ? 'pin_modal_wrong_pin' : 'pin_modal_timeout');
+      setCurrentScreen('alert-sent');
       console.log("PIN Timeout! SOS Alert Fired.");
     }
     return () => clearInterval(interval);
-  }, [isPinModalOpen, pinTimeout, isAlertActive]);
+  }, [isPinModalOpen, pinTimeout, isAlertActive, pinModalWrongPinBufferActive]);
 
   const handleConfirmationPinChange = (index: number, value: string) => {
     const newPin = [...confirmationPin];
@@ -631,7 +1590,9 @@ export default function App() {
 
       if (enteredPin === actualCorrectPin) {
         // Success
+        if (pinModalResetTimeout.current) clearTimeout(pinModalResetTimeout.current);
         setIsPinModalOpen(false);
+        setPinModalWrongPinBufferActive(false);
         setWalkSummary({
           duration: formatTime(totalTime - timeLeft),
           distance: (Math.random() * (1.5 - 0.5) + 0.5).toFixed(1) + ' km', // Simulated distance
@@ -643,9 +1604,16 @@ export default function App() {
         setConfirmationPin(['', '', '', '']);
         setPinTimeout(60);
       } else {
-        // Wrong PIN - Alert immediately
-        setIsAlertActive(true);
-        console.log("Wrong PIN! SOS Alert Fired.");
+        // Wrong PIN - Start 30 second alert buffer
+        if (pinModalResetTimeout.current) clearTimeout(pinModalResetTimeout.current);
+        if (!pinModalWrongPinBufferActive) {
+          setPinModalWrongPinBufferActive(true);
+          setPinTimeout(30);
+        }
+        pinModalResetTimeout.current = setTimeout(() => {
+          setConfirmationPin(['', '', '', '']);
+        }, 2000);
+        console.log("Wrong PIN detected. 30 second alert buffer started.");
       }
     }
   };
@@ -659,11 +1627,69 @@ export default function App() {
   const startWalk = (durationMinutes: number) => {
     const totalSeconds = durationMinutes * 60;
     const newWalkId = Math.random().toString(36).substring(2, 11);
+    const saahas = getSaahasState();
+    saahas.walk = {
+      gaitData: null,
+      gaitStartTime: null,
+      gaitListener: null,
+      gaitListenerAttached: false,
+      gaitPaused: false,
+    };
+    saahas.alert = {
+      fired: false,
+      trigger: null,
+      gaitType: null,
+      gaitReason: null,
+      gaitData: null,
+      messageBody: null,
+    };
+    overdueNotificationSentWalkId.current = null;
+    alertNotificationSentKey.current = null;
+    safeArrivalNotificationSentKey.current = null;
+    safeArrivalNotificationPendingKey.current = null;
     setWalkId(newWalkId);
     setTimeLeft(totalSeconds);
     setTotalTime(totalSeconds);
     setStartTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    setPinModalWrongPinBufferActive(false);
+    setConfirmationPin(['', '', '', '']);
+    setPinTimeout(60);
+    setAlertTriggerReason(null);
+    setIsAlertActive(false);
+    setShadowAlertStatus({
+      status: 'idle',
+      shadowModeActive: false,
+      automaticSosTriggered: false,
+      ackDeadlineAt: null,
+      acknowledgedAt: null,
+      acknowledgedBy: null,
+      nearbyUsersNotified: 0,
+    });
     setCurrentScreen('active-walk');
+    startGaitGhost();
+    fetch('/api/notify-walk-start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userName: guestData.name || profileData.fullName,
+        userPhone: guestData.phone || profileData.phone,
+        emergencyContacts: [
+          {
+            name: profileData.contact1Name || 'Emergency Contact 1',
+            phone: guestData.contact1 || profileData.contact1Phone,
+          },
+          {
+            name: profileData.contact2Name || 'Emergency Contact 2',
+            phone: guestData.contact2 || profileData.contact2Phone,
+          },
+        ],
+        walkDurationMinutes: durationMinutes,
+        walkId: newWalkId
+      })
+    })
+      .then(res => res.json())
+      .then(data => console.log('WhatsApp notification sent:', data))
+      .catch(err => console.error('WhatsApp notification failed:', err));
   };
 
   // Save to localStorage whenever guestData changes
@@ -730,6 +1756,111 @@ export default function App() {
     setCurrentScreen('landing');
   };
 
+  const handleSendNotification = () => {
+    const walkDurationMinutes = guestData.isCustom
+      ? (guestData.customHours * 60) + guestData.customMinutes
+      : guestData.duration;
+    const notificationWalkId = walkId || Math.random().toString(36).substring(2, 11);
+
+    fetch('/api/notify-walk-start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userName: guestData.name,
+        userPhone: guestData.phone,
+        emergencyContacts: [
+          {
+            name: 'Emergency Contact 1',
+            phone: guestData.contact1,
+          },
+          {
+            name: 'Emergency Contact 2',
+            phone: guestData.contact2,
+          },
+        ],
+        walkDurationMinutes,
+        walkId: notificationWalkId,
+      })
+    })
+      .then(res => res.json())
+      .then(data => console.log('WhatsApp notification sent:', data))
+      .catch(err => console.error('WhatsApp notification failed:', err));
+  };
+
+  const handleProfileLoginState = (fullName: string) => {
+    const normalizedFullName = fullName.trim();
+    setLoggedInUserName(normalizedFullName);
+    localStorage.setItem('saahas_logged_in_profile_name', normalizedFullName);
+    setShowProfileMenu(false);
+  };
+
+  const handleLogout = () => {
+    setLoggedInUserName('');
+    setShowProfileMenu(false);
+    localStorage.removeItem('saahas_logged_in_profile_name');
+  };
+
+  const handleSaveProfile = () => {
+    handleProfileLoginState(profileData.fullName);
+    fetch('/api/profile/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fullName: profileData.fullName,
+        phone: profileData.phone,
+        homeAddress: profileData.homeAddress,
+        contact1Name: profileData.contact1Name,
+        contact1Phone: profileData.contact1Phone,
+        contact1Role: profileData.contact1Role,
+        contact2Name: profileData.contact2Name,
+        contact2Phone: profileData.contact2Phone,
+        contact2Role: profileData.contact2Role,
+        guardianName: profileData.guardianName,
+        alertMessage: profileData.alertMessage,
+        defaultDuration: profileData.defaultDuration,
+        pin: profileData.pin.join(''),
+      })
+    })
+      .then(res => res.json())
+      .then(data => console.log('Profile saved to MongoDB:', data))
+      .catch(err => console.error('Profile save failed:', err));
+
+    startWalk(profileData.defaultDuration);
+  };
+
+  const handleLoginProfile = () => {
+    fetch('/api/profile/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: profileData.phone,
+        pin: profileData.pin.join(''),
+      })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.profile) {
+          setProfileData(data.profile);
+          handleProfileLoginState(data.profile.fullName || profileData.fullName);
+          setCurrentScreen('landing');
+          console.log('Profile login successful:', data);
+          return;
+        }
+
+        console.error('Profile login failed:', data);
+      })
+      .catch(err => console.error('Profile login failed:', err));
+  };
+
+  const handlePinConfirmClose = () => {
+    if (pinErrorResetTimeout.current) clearTimeout(pinErrorResetTimeout.current);
+    if (pinSuccessTimeout.current) clearTimeout(pinSuccessTimeout.current);
+    if (pinBufferActive && navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
+    setIsAlertActive(true);
+    setAlertTriggerReason('pin_confirm_closed');
+    setCurrentScreen('alert-sent');
+  };
+
   return (
     <div className="min-h-screen bg-[#050608] text-white font-sans overflow-x-hidden relative selection:bg-[#FF8A65]/30">
       <AnimatePresence mode="wait">
@@ -742,6 +1873,33 @@ export default function App() {
             transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
             className="min-h-screen flex flex-col items-center justify-between p-8 relative"
           >
+            {loggedInUserName && (
+              <div className="absolute top-8 right-8 z-20 flex flex-col items-end">
+                <button
+                  onClick={() => setShowProfileMenu(prev => !prev)}
+                  className="w-12 h-12 rounded-full bg-white/10 border border-white/15 text-white font-headline font-black text-lg flex items-center justify-center shadow-[0_15px_40px_rgba(0,0,0,0.35)] backdrop-blur-md"
+                >
+                  {loggedInUserName.trim().charAt(0).toUpperCase()}
+                </button>
+                <AnimatePresence>
+                  {showProfileMenu && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -8, scale: 0.96 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                      className="mt-3 rounded-2xl bg-[#121725]/95 border border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-xl overflow-hidden"
+                    >
+                      <button
+                        onClick={handleLogout}
+                        className="px-5 py-3 text-[11px] tracking-[0.25em] font-bold text-white/80 hover:text-white hover:bg-white/5 transition-colors"
+                      >
+                        LOG OUT
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
             {/* Premium Background Atmosphere */}
             <div className="absolute top-[-10%] left-[-10%] w-[80%] h-[60%] bg-blue-600/5 rounded-full blur-[140px] pointer-events-none" />
             <div className="absolute bottom-[-5%] right-[-5%] w-[70%] h-[50%] bg-orange-600/5 rounded-full blur-[140px] pointer-events-none" />
@@ -913,6 +2071,16 @@ export default function App() {
                     />
                   </div>
                   <div className="group relative">
+                    <label className="block font-label text-[10px] uppercase tracking-widest text-on-surface-variant mb-2 ml-1 font-bold">Phone Number</label>
+                    <input 
+                      className="w-full bg-surface-container-highest border border-outline-variant/15 rounded-xl px-5 py-4 focus:ring-1 focus:ring-primary/20 focus:border-primary/20 transition-all outline-none text-on-surface placeholder:text-on-secondary" 
+                      placeholder="919876543210" 
+                      type="tel"
+                      value={profileData.phone}
+                      onChange={(e) => setProfileData({ ...profileData, phone: e.target.value })}
+                    />
+                  </div>
+                  <div className="group relative">
                     <label className="block font-label text-[10px] uppercase tracking-widest text-on-surface-variant mb-2 ml-1 font-bold">Home Address</label>
                     <div className="relative">
                       <input 
@@ -1038,13 +2206,23 @@ export default function App() {
                 <div className="pt-6">
                   <button 
                     onClick={() => {
-                      startWalk(profileData.defaultDuration);
+                      handleSaveProfile();
                     }}
                     className="w-full bg-linear-to-br from-primary to-tertiary py-5 rounded-2xl text-on-primary font-headline font-bold text-lg tracking-wide shadow-lg shadow-primary/20 active:scale-[0.98] transition-all flex items-center justify-center gap-3" 
                     type="button"
                   >
                     <ShieldCheck className="w-6 h-6" />
                     SAVE PROFILE
+                  </button>
+                  <button 
+                    onClick={() => {
+                      handleLoginProfile();
+                    }}
+                    className="w-full mt-4 bg-surface-container border border-outline-variant/15 py-5 rounded-2xl text-on-surface font-headline font-bold text-lg tracking-wide active:scale-[0.98] transition-all flex items-center justify-center gap-3" 
+                    type="button"
+                  >
+                    <User className="w-6 h-6" />
+                    LOGIN PROFILE
                   </button>
                   <p className="text-center text-[10px] text-on-surface-variant/40 mt-4 uppercase tracking-[0.2em] font-bold">Secured by Saahas Cloud Encryption</p>
                 </div>
@@ -1089,6 +2267,7 @@ export default function App() {
               sosTapTimeout.current = setTimeout(() => setSosTapCount(0), 3000);
               if (sosTapCount + 1 >= 10) {
                 setIsAlertActive(true);
+                setAlertTriggerReason('manual_sos_triggered');
                 setCurrentScreen('alert-sent');
               }
             }}
@@ -1129,9 +2308,9 @@ export default function App() {
                   <MapPin className="w-3 h-3" />
                   <span className="text-[9px] font-bold uppercase tracking-wider">{gpsStatus === 'live' ? 'GPS Live' : 'GPS Limited'}</span>
                 </div>
-                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                <div id="badge-gait" className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
                   <Footprints className="w-3 h-3" />
-                  <span className="text-[9px] font-bold uppercase tracking-wider">Gait Monitor On</span>
+                  <span data-gait-label className="text-[9px] font-bold uppercase tracking-wider">Gait Monitor On</span>
                 </div>
               </div>
 
@@ -1236,6 +2415,9 @@ export default function App() {
                     setPinAttempt([]);
                     setPinConfirmTimer(30);
                     setPinError(false);
+                    setPinBufferActive(false);
+                    setPinSuccess(false);
+                    setPinWrongAttemptCount(0);
                     setShowDismissWarning(false);
                     setCurrentScreen('pin-confirm');
                   }}
@@ -1268,10 +2450,10 @@ export default function App() {
                     </div>
 
                     {/* Title & Subtext */}
-                    <h3 className="text-xl font-bold text-white mb-2">Cancel your walk?</h3>
+                    <h3 className="text-xl font-bold text-white mb-2">Leaving your walk?</h3>
                     <p className="text-sm text-[#888] mb-6 leading-relaxed">
-                      Enter your PIN to confirm you are safe.<br />
-                      No PIN = walk stays active and protected.
+                      Enter your PIN to cancel safely.<br />
+                      Wrong PIN triggers an alert for your safety.
                     </p>
 
                     {/* PIN Boxes */}
@@ -1286,7 +2468,7 @@ export default function App() {
                             : cancelPinAttempt.length === i 
                             ? 'bg-white/5 border-[#FF6B00]/50' 
                             : 'bg-white/5 border-white/10'
-                          } ${cancelPinError ? 'border-red-500 bg-red-500/10' : ''}`}
+                          } ${cancelPinError ? 'border-[#FF3B30] bg-[#FF3B30]/10' : ''}`}
                         >
                           {cancelPinAttempt.length > i && (
                             <div className="w-3 h-3 rounded-full bg-white" />
@@ -1296,8 +2478,10 @@ export default function App() {
                     </div>
 
                     {cancelPinError && (
-                      <p className="text-[#FF3B30] text-xs font-bold mb-4 animate-pulse">
-                        Wrong PIN. Walk is still active.
+                      <p className="text-[#FF3B30] text-[13px] font-medium mb-4 text-center">
+                        {cancelPinWrongAttemptCount > 1
+                          ? `Attempt ${cancelPinWrongAttemptCount}. Alert fires in ${cancelPinTimer} seconds`
+                          : `Wrong PIN. Alert will fire in ${cancelPinTimer} seconds`}
                       </p>
                     )}
 
@@ -1334,11 +2518,15 @@ export default function App() {
                           initial={{ width: '100%' }}
                           animate={{ width: `${(cancelPinTimer / 30) * 100}%` }}
                           transition={{ duration: 1, ease: "linear" }}
-                          className="h-full bg-[#FF6B00] rounded-full"
+                          className={`h-full rounded-full transition-colors duration-300 ${
+                            cancelPinAlertBufferActive || cancelPinTimer <= 10 ? 'bg-[#FF3B30]' : 'bg-[#FF6B00]'
+                          }`}
                         />
                       </div>
-                      <p className="text-center text-[10px] text-[#888] font-medium">
-                        Walk stays active in <span className="text-white font-bold">{cancelPinTimer}</span> seconds
+                      <p className="text-center text-[12px] text-[#888] font-medium">
+                        {cancelPinAlertBufferActive ? 'Alert fires in ' : 'Modal closes in '}
+                        <span className="text-white font-bold">{cancelPinTimer}</span>
+                        {' '}seconds
                       </p>
                     </div>
 
@@ -1361,7 +2549,7 @@ export default function App() {
                   className="fixed bottom-32 left-1/2 bg-[#00C853]/10 border border-[#00C853] px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 z-120"
                 >
                   <ShieldCheck className="w-4 h-4 text-[#00C853]" />
-                  <p className="font-label text-xs font-bold text-white whitespace-nowrap">Walk still active. You're protected.</p>
+                  <p className="font-label text-xs font-bold text-white whitespace-nowrap">Walk still active. You are protected.</p>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -1389,10 +2577,7 @@ export default function App() {
               <div className="w-10" />
               <h1 className="text-2xl font-bold text-white font-headline">Confirm Safe Arrival</h1>
               <button 
-                onClick={() => {
-                  setIsAlertActive(true);
-                  setCurrentScreen('alert-sent');
-                }}
+                onClick={handlePinConfirmClose}
                 className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center hover:bg-white/10 transition-colors"
               >
                 <X className="w-5 h-5 text-white/60" />
@@ -1411,40 +2596,33 @@ export default function App() {
 
             {/* Instructions */}
             <div className="text-center space-y-2 mb-10">
-              <h2 className="text-lg font-medium text-white">Enter your secret PIN</h2>
-              <p className="text-sm text-red-500 font-medium">Wrong PIN or no response = alert fires</p>
-            </div>
-
-            {/* Timer Bar */}
-            <div className="w-full space-y-3 mb-12">
-              <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-                <motion.div 
-                  initial={{ width: '100%' }}
-                  animate={{ width: `${(pinConfirmTimer / 30) * 100}%` }}
-                  transition={{ duration: 1, ease: "linear" }}
-                  className={`h-full rounded-full ${pinConfirmTimer > 10 ? 'bg-orange-500' : 'bg-red-500'}`}
-                />
-              </div>
-              <p className="text-center text-xs text-white/40 font-medium">
-                Alert fires in <span className="text-white font-bold">{pinConfirmTimer}</span> seconds
-              </p>
+              <h2 className="text-lg font-medium text-white">{pinBufferActive ? 'Enter correct PIN to stop alert' : 'Enter your secret PIN'}</h2>
+              <p className="text-sm text-red-500 font-medium">{pinBufferActive ? 'Countdown will continue until the correct PIN is entered' : 'Enter your PIN to confirm safe arrival'}</p>
             </div>
 
             {/* PIN Boxes */}
-            <div className="flex justify-center gap-3 mb-12">
+            <div className="flex justify-center gap-3 mb-4">
               {[0, 1, 2, 3].map((i) => (
                 <motion.div
                   key={i}
-                  animate={pinError ? { x: [0, -10, 10, -10, 10, 0] } : {}}
+                  animate={pinSuccess ? { scale: [1, 1.08, 1] } : pinError ? { x: [0, -10, 10, -10, 10, 0] } : {}}
                   className={`w-16 h-20 rounded-2xl border-2 flex items-center justify-center transition-all duration-300 ${
-                    pinAttempt.length > i 
+                    pinSuccess
+                    ? 'border-[#00C853] bg-[#00C853]/10'
+                    : pinAttempt.length > i 
                     ? 'bg-white/5 border-white/20' 
                     : pinAttempt.length === i 
                     ? 'bg-white/5 border-orange-500/50 shadow-[0_0_20px_rgba(255,143,120,0.1)]' 
                     : 'bg-white/5 border-white/10'
-                  } ${pinError ? 'border-red-500 bg-red-500/10' : ''}`}
+                  } ${pinError ? 'border-[#FF3B30] bg-[#FF3B30]/10' : ''}`}
                 >
-                  {pinAttempt.length > i && (
+                  {pinSuccess ? (
+                    <motion.div
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      className="w-4 h-4 rounded-full bg-[#00C853] shadow-[0_0_12px_rgba(0,200,83,0.65)]"
+                    />
+                  ) : pinAttempt.length > i && (
                     <motion.div 
                       initial={{ scale: 0 }}
                       animate={{ scale: 1 }}
@@ -1454,6 +2632,28 @@ export default function App() {
                 </motion.div>
               ))}
             </div>
+
+            {(pinError || pinSuccess) && (
+              <p className={`text-center mb-4 font-medium ${pinSuccess ? 'text-[#00C853] text-[14px]' : pinWrongAttemptCount > 1 ? 'text-[#FF3B30] text-[13px]' : 'text-[#FF3B30] text-[14px]'}`}>
+                {pinSuccess ? 'Safe arrival confirmed' : pinWrongAttemptCount > 1 ? `Attempt ${pinWrongAttemptCount}. Alert fires in ${pinConfirmTimer} seconds` : 'Incorrect PIN'}
+              </p>
+            )}
+
+            {pinBufferActive && !pinSuccess && (
+              <div className="w-full space-y-3 mb-12">
+                <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
+                  <motion.div 
+                    initial={{ width: '100%' }}
+                    animate={{ width: `${(pinConfirmTimer / 30) * 100}%` }}
+                    transition={{ duration: 1, ease: "linear" }}
+                    className="h-full rounded-full bg-[#FF3B30]"
+                  />
+                </div>
+                <p className="text-center text-[13px] text-[#888] font-medium">
+                  Alert fires in {pinConfirmTimer} seconds
+                </p>
+              </div>
+            )}
 
             {/* Numeric Keypad */}
             <div className="mt-auto grid grid-cols-3 gap-4 max-w-xs mx-auto w-full pb-8">
@@ -1744,6 +2944,7 @@ export default function App() {
                           setIsCallInProgress(true);
                           // Start 5 minute hidden countdown
                           fakeCallAlertTimeout.current = setTimeout(() => {
+                            setAlertTriggerReason('fake_call_hidden_timeout');
                             setCurrentScreen('alert-sent');
                           }, 300000);
                         }}
@@ -1823,17 +3024,17 @@ export default function App() {
 
             <h2 className="text-2xl font-bold text-white mb-4">Are you safe?</h2>
             
-            <p className="text-sm text-[#888] text-center max-w-70 mb-12 leading-relaxed">
+            <p className={`text-sm text-center max-w-70 mb-12 leading-relaxed ${fakeCallPinSuccess ? 'text-[#00C853]' : fakeCallPinError ? 'text-[#FF3B30]' : 'text-[#888]'}`}>
               {fakeCallPinSuccess 
                 ? "Stay safe. Walk resumed."
                 : fakeCallPinError 
-                  ? "Incorrect PIN."
+                  ? "Wrong PIN detected"
                   : "Enter your secret PIN to confirm. No response in 30 seconds = alert fires."
               }
             </p>
 
             {/* Countdown Bar */}
-            {!fakeCallPinSuccess && !fakeCallPinError && (
+            {!fakeCallPinSuccess && (
               <div className="w-full mb-12">
                 <div className="w-full h-1 bg-[#1a1a1a] rounded-full overflow-hidden">
                   <motion.div
@@ -1849,6 +3050,11 @@ export default function App() {
                 <p className="text-[13px] text-[#888] text-center mt-3">
                   Alert fires in {fakeCallPinTimer} seconds
                 </p>
+                {fakeCallWrongPinBufferActive && (
+                  <p className="text-[13px] text-[#888] text-center mt-2">
+                    Alert fires in {fakeCallWrongPinTimer} seconds
+                  </p>
+                )}
               </div>
             )}
 
@@ -1920,7 +3126,13 @@ export default function App() {
               </p>
             )}
             <p className="text-white/80 text-lg mb-12 font-medium leading-relaxed">
-              Your emergency contacts and local authorities have been notified with your live location.
+              {shadowAlertStatus.status === 'waiting_ack'
+                ? 'Your emergency contacts have been notified. Waiting 60 seconds for a YES acknowledgment before Shadow Mode starts silently.'
+                : shadowAlertStatus.status === 'acknowledged'
+                  ? 'An emergency contact acknowledged with YES. Shadow Mode remains off.'
+                  : shadowAlertStatus.shadowModeActive
+                    ? `No acknowledgment was received. Shadow Mode is now active in the background and automatic SOS has been triggered${shadowAlertStatus.nearbyUsersNotified > 0 ? ` for ${shadowAlertStatus.nearbyUsersNotified} nearby Saahas users.` : '.'}`
+                    : 'Your emergency contacts and local authorities have been notified with your live location.'}
             </p>
             <button 
               onClick={() => setCurrentScreen('active-walk')}
@@ -2081,6 +3293,13 @@ export default function App() {
                       className="w-full bg-surface-low border border-outline-variant/30 rounded-xl px-4 py-4 text-on-surface placeholder:text-on-surface-variant/40 focus:border-primary/40 focus:outline-none transition-all font-body"
                     />
                   </div>
+                  <button
+                    type="button"
+                    onClick={handleSendNotification}
+                    className="w-full py-4 rounded-xl bg-linear-to-r from-primary to-tertiary text-on-primary font-headline font-bold tracking-wider active:scale-95 transition-all"
+                  >
+                    SEND NOTIFICATION
+                  </button>
                 </div>
 
                 {/* Walk Duration Selector */}

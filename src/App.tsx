@@ -85,6 +85,7 @@ type SaahasRuntime = {
 };
 
 export default function App() {
+  const INDIAN_PHONE_LENGTH = 10;
   const [currentScreen, setCurrentScreen] = useState<Screen>('landing');
   const [guardianStatus, setGuardianStatus] = useState<'searching' | 'found' | 'not-found'>('searching');
   const [guardianAcknowledged, setGuardianAcknowledged] = useState(false);
@@ -98,6 +99,8 @@ export default function App() {
   const [fakeCallWrongPinBufferActive, setFakeCallWrongPinBufferActive] = useState(false);
   const [fakeCallWrongPinTimer, setFakeCallWrongPinTimer] = useState(30);
   const [alertTriggerReason, setAlertTriggerReason] = useState<string | null>(null);
+  const [isSendingNotification, setIsSendingNotification] = useState(false);
+  const [isStartingWalk, setIsStartingWalk] = useState(false);
   const fakeCallAlertTimeout = useRef<NodeJS.Timeout | null>(null);
   const fakeCallPinInterval = useRef<NodeJS.Timeout | null>(null);
   const fakeCallPinResetTimeout = useRef<NodeJS.Timeout | null>(null);
@@ -410,6 +413,7 @@ export default function App() {
   const safeArrivalNotificationSentKey = useRef<string | null>(null);
   const safeArrivalNotificationPendingKey = useRef<string | null>(null);
   const pinModalResetTimeout = useRef<NodeJS.Timeout | null>(null);
+  const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const savedLoggedInUserName = localStorage.getItem('saahas_logged_in_profile_name');
@@ -421,6 +425,7 @@ export default function App() {
   useEffect(() => {
     return () => {
       if (pinModalResetTimeout.current) clearTimeout(pinModalResetTimeout.current);
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     };
   }, []);
 
@@ -452,6 +457,35 @@ export default function App() {
 
   const navigateTo = (screen: Screen) => {
     setCurrentScreen(screen);
+  };
+
+  const normalizeIndianPhoneInput = (value: string) => {
+    let digits = value.replace(/\D/g, '');
+
+    if (digits.startsWith('91') && digits.length > INDIAN_PHONE_LENGTH) {
+      digits = digits.slice(2);
+    }
+
+    if (digits.startsWith('0') && digits.length > INDIAN_PHONE_LENGTH) {
+      digits = digits.slice(1);
+    }
+
+    return digits.slice(0, INDIAN_PHONE_LENGTH);
+  };
+
+  const isValidIndianPhone = (value: string) => normalizeIndianPhoneInput(value).length === INDIAN_PHONE_LENGTH;
+
+  const showTemporaryToast = (message: string) => {
+    setToastMessage(message);
+    setShowToast(true);
+
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+
+    toastTimeoutRef.current = setTimeout(() => {
+      setShowToast(false);
+    }, 3000);
   };
 
   const getCurrentUserName = () => guestData.name || profileData.fullName || 'User';
@@ -512,15 +546,45 @@ export default function App() {
     return `https://maps.google.com/?q=${point.lat},${point.lng}`;
   };
 
+  const getLiveLocationPoint = (): LiveLocationPoint | null => {
+    if (latestLocationRef.current) {
+      return latestLocationRef.current;
+    }
+
+    const breadcrumbPoint = breadcrumbs.current[breadcrumbs.current.length - 1];
+    if (!breadcrumbPoint) {
+      return null;
+    }
+
+    return {
+      ...breadcrumbPoint,
+      label: currentLocation,
+    };
+  };
+
+  const buildShadowMapEmbedUrl = (point?: { lat: number; lng: number } | null) => {
+    if (!point) return null;
+
+    const latSpan = 0.008;
+    const longitudeScale = Math.max(Math.cos((point.lat * Math.PI) / 180), 0.2);
+    const lngSpan = latSpan / longitudeScale;
+    const left = point.lng - lngSpan;
+    const right = point.lng + lngSpan;
+    const top = point.lat + latSpan;
+    const bottom = point.lat - latSpan;
+
+    return `https://www.openstreetmap.org/export/embed.html?bbox=${left}%2C${bottom}%2C${right}%2C${top}&layer=mapnik&marker=${point.lat}%2C${point.lng}`;
+  };
+
   const getEmergencyContacts = () => {
     return [
       {
         name: profileData.contact1Name || 'Emergency Contact 1',
-        phone: guestData.contact1 || profileData.contact1Phone,
+        phone: normalizeIndianPhoneInput(guestData.contact1 || profileData.contact1Phone),
       },
       {
         name: profileData.contact2Name || 'Emergency Contact 2',
-        phone: guestData.contact2 || profileData.contact2Phone,
+        phone: normalizeIndianPhoneInput(guestData.contact2 || profileData.contact2Phone),
       },
     ].filter((contact) => Boolean(contact.phone));
   };
@@ -1625,71 +1689,74 @@ Reply NO — I cannot reach them`;
   };
 
   const startWalk = (durationMinutes: number) => {
-    const totalSeconds = durationMinutes * 60;
-    const newWalkId = Math.random().toString(36).substring(2, 11);
-    const saahas = getSaahasState();
-    saahas.walk = {
-      gaitData: null,
-      gaitStartTime: null,
-      gaitListener: null,
-      gaitListenerAttached: false,
-      gaitPaused: false,
-    };
-    saahas.alert = {
-      fired: false,
-      trigger: null,
-      gaitType: null,
-      gaitReason: null,
-      gaitData: null,
-      messageBody: null,
-    };
-    overdueNotificationSentWalkId.current = null;
-    alertNotificationSentKey.current = null;
-    safeArrivalNotificationSentKey.current = null;
-    safeArrivalNotificationPendingKey.current = null;
-    setWalkId(newWalkId);
-    setTimeLeft(totalSeconds);
-    setTotalTime(totalSeconds);
-    setStartTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-    setPinModalWrongPinBufferActive(false);
-    setConfirmationPin(['', '', '', '']);
-    setPinTimeout(60);
-    setAlertTriggerReason(null);
-    setIsAlertActive(false);
-    setShadowAlertStatus({
-      status: 'idle',
-      shadowModeActive: false,
-      automaticSosTriggered: false,
-      ackDeadlineAt: null,
-      acknowledgedAt: null,
-      acknowledgedBy: null,
-      nearbyUsersNotified: 0,
-    });
-    setCurrentScreen('active-walk');
-    startGaitGhost();
-    fetch('/api/notify-walk-start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userName: guestData.name || profileData.fullName,
-        userPhone: guestData.phone || profileData.phone,
-        emergencyContacts: [
-          {
-            name: profileData.contact1Name || 'Emergency Contact 1',
-            phone: guestData.contact1 || profileData.contact1Phone,
-          },
-          {
-            name: profileData.contact2Name || 'Emergency Contact 2',
-            phone: guestData.contact2 || profileData.contact2Phone,
-          },
-        ],
-        walkDurationMinutes: durationMinutes,
-        walkId: newWalkId
+    const emergencyContacts = getEmergencyContacts();
+
+    if (emergencyContacts.length < 2 || emergencyContacts.some((contact) => !isValidIndianPhone(contact.phone))) {
+      showTemporaryToast('Add both emergency contacts with valid 10-digit Indian numbers.');
+      return;
+    }
+
+    setIsStartingWalk(true);
+
+    setTimeout(() => {
+      const totalSeconds = durationMinutes * 60;
+      const newWalkId = Math.random().toString(36).substring(2, 11);
+      const saahas = getSaahasState();
+      saahas.walk = {
+        gaitData: null,
+        gaitStartTime: null,
+        gaitListener: null,
+        gaitListenerAttached: false,
+        gaitPaused: false,
+      };
+      saahas.alert = {
+        fired: false,
+        trigger: null,
+        gaitType: null,
+        gaitReason: null,
+        gaitData: null,
+        messageBody: null,
+      };
+      overdueNotificationSentWalkId.current = null;
+      alertNotificationSentKey.current = null;
+      safeArrivalNotificationSentKey.current = null;
+      safeArrivalNotificationPendingKey.current = null;
+      setWalkId(newWalkId);
+      setTimeLeft(totalSeconds);
+      setTotalTime(totalSeconds);
+      setStartTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      setPinModalWrongPinBufferActive(false);
+      setConfirmationPin(['', '', '', '']);
+      setPinTimeout(60);
+      setAlertTriggerReason(null);
+      setIsAlertActive(false);
+      setShadowAlertStatus({
+        status: 'idle',
+        shadowModeActive: false,
+        automaticSosTriggered: false,
+        ackDeadlineAt: null,
+        acknowledgedAt: null,
+        acknowledgedBy: null,
+        nearbyUsersNotified: 0,
+      });
+      setCurrentScreen('active-walk');
+      startGaitGhost();
+      setIsStartingWalk(false);
+      fetch('/api/notify-walk-start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userName: guestData.name || profileData.fullName,
+          userPhone: guestData.phone || profileData.phone,
+          emergencyContacts,
+          walkDurationMinutes: durationMinutes,
+          walkId: newWalkId
+        })
       })
-    })
-      .then(res => res.json())
-      .then(data => console.log('WhatsApp notification sent:', data))
-      .catch(err => console.error('WhatsApp notification failed:', err));
+        .then(res => res.json())
+        .then(data => console.log('WhatsApp notification sent:', data))
+        .catch(err => console.error('WhatsApp notification failed:', err));
+    }, 1200);
   };
 
   // Save to localStorage whenever guestData changes
@@ -1757,12 +1824,19 @@ Reply NO — I cannot reach them`;
   };
 
   const handleSendNotification = () => {
+    if (!isValidIndianPhone(guestData.contact1) || !isValidIndianPhone(guestData.contact2)) {
+      showTemporaryToast('Emergency contacts must include 10 digits. +91 is added automatically.');
+      return;
+    }
+
+    setIsSendingNotification(true);
     const walkDurationMinutes = guestData.isCustom
       ? (guestData.customHours * 60) + guestData.customMinutes
       : guestData.duration;
     const notificationWalkId = walkId || Math.random().toString(36).substring(2, 11);
 
-    fetch('/api/notify-walk-start', {
+    // Simulate network delay for UX satisfaction before resetting spinner
+    const fetchPromise = fetch('/api/notify-walk-start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1771,11 +1845,11 @@ Reply NO — I cannot reach them`;
         emergencyContacts: [
           {
             name: 'Emergency Contact 1',
-            phone: guestData.contact1,
+            phone: normalizeIndianPhoneInput(guestData.contact1),
           },
           {
             name: 'Emergency Contact 2',
-            phone: guestData.contact2,
+            phone: normalizeIndianPhoneInput(guestData.contact2),
           },
         ],
         walkDurationMinutes,
@@ -1783,8 +1857,19 @@ Reply NO — I cannot reach them`;
       })
     })
       .then(res => res.json())
-      .then(data => console.log('WhatsApp notification sent:', data))
-      .catch(err => console.error('WhatsApp notification failed:', err));
+      .then(data => {
+        console.log('WhatsApp notification sent:', data);
+        showTemporaryToast('WhatsApp notifications sent to allies!');
+      })
+      .catch(err => {
+        console.error('WhatsApp notification failed:', err);
+        showTemporaryToast('Failed to send WhatsApp. Please check connection.');
+      });
+
+    Promise.all([fetchPromise, new Promise(resolve => setTimeout(resolve, 1500))])
+      .finally(() => {
+        setIsSendingNotification(false);
+      });
   };
 
   const handleProfileLoginState = (fullName: string) => {
@@ -1798,9 +1883,15 @@ Reply NO — I cannot reach them`;
     setLoggedInUserName('');
     setShowProfileMenu(false);
     localStorage.removeItem('saahas_logged_in_profile_name');
+    setCurrentScreen('landing');
   };
 
   const handleSaveProfile = () => {
+    if (!isValidIndianPhone(profileData.contact1Phone) || !isValidIndianPhone(profileData.contact2Phone)) {
+      showTemporaryToast('Emergency contacts must include 10 digits. +91 is added automatically.');
+      return;
+    }
+
     handleProfileLoginState(profileData.fullName);
     fetch('/api/profile/register', {
       method: 'POST',
@@ -1810,10 +1901,10 @@ Reply NO — I cannot reach them`;
         phone: profileData.phone,
         homeAddress: profileData.homeAddress,
         contact1Name: profileData.contact1Name,
-        contact1Phone: profileData.contact1Phone,
+        contact1Phone: normalizeIndianPhoneInput(profileData.contact1Phone),
         contact1Role: profileData.contact1Role,
         contact2Name: profileData.contact2Name,
-        contact2Phone: profileData.contact2Phone,
+        contact2Phone: normalizeIndianPhoneInput(profileData.contact2Phone),
         contact2Role: profileData.contact2Role,
         guardianName: profileData.guardianName,
         alertMessage: profileData.alertMessage,
@@ -1822,10 +1913,15 @@ Reply NO — I cannot reach them`;
       })
     })
       .then(res => res.json())
-      .then(data => console.log('Profile saved to MongoDB:', data))
-      .catch(err => console.error('Profile save failed:', err));
-
-    startWalk(profileData.defaultDuration);
+      .then(data => {
+        console.log('Profile saved to MongoDB:', data);
+        showTemporaryToast('Profile saved. You are protected.');
+        setCurrentScreen('landing');
+      })
+      .catch(err => {
+        console.error('Profile save failed:', err);
+        showTemporaryToast('Profile save failed. Please try again.');
+      });
   };
 
   const handleLoginProfile = () => {
@@ -1840,7 +1936,11 @@ Reply NO — I cannot reach them`;
       .then(res => res.json())
       .then(data => {
         if (data.success && data.profile) {
-          setProfileData(data.profile);
+          setProfileData({
+            ...data.profile,
+            contact1Phone: normalizeIndianPhoneInput(data.profile.contact1Phone || ''),
+            contact2Phone: normalizeIndianPhoneInput(data.profile.contact2Phone || ''),
+          });
           handleProfileLoginState(data.profile.fullName || profileData.fullName);
           setCurrentScreen('landing');
           console.log('Profile login successful:', data);
@@ -1861,8 +1961,17 @@ Reply NO — I cannot reach them`;
     setCurrentScreen('alert-sent');
   };
 
+  const profileContact1Digits = normalizeIndianPhoneInput(profileData.contact1Phone);
+  const profileContact2Digits = normalizeIndianPhoneInput(profileData.contact2Phone);
+  const guestContact1Digits = normalizeIndianPhoneInput(guestData.contact1);
+  const guestContact2Digits = normalizeIndianPhoneInput(guestData.contact2);
+  const profileEmergencyContactsValid = isValidIndianPhone(profileData.contact1Phone) && isValidIndianPhone(profileData.contact2Phone);
+  const guestEmergencyContactsValid = isValidIndianPhone(guestData.contact1) && isValidIndianPhone(guestData.contact2);
+  const shadowMapPoint = getLiveLocationPoint();
+  const shadowMapEmbedUrl = buildShadowMapEmbedUrl(shadowMapPoint);
+
   return (
-    <div className="min-h-screen bg-[#050608] text-white font-sans overflow-x-hidden relative selection:bg-[#FF8A65]/30">
+    <div className="min-h-screen bg-background text-on-surface font-sans overflow-x-hidden relative selection:bg-primary/30">
       <AnimatePresence mode="wait">
         {currentScreen === 'landing' ? (
           <motion.div
@@ -1901,10 +2010,10 @@ Reply NO — I cannot reach them`;
               </div>
             )}
             {/* Premium Background Atmosphere */}
-            <div className="absolute top-[-10%] left-[-10%] w-[80%] h-[60%] bg-blue-600/5 rounded-full blur-[140px] pointer-events-none" />
-            <div className="absolute bottom-[-5%] right-[-5%] w-[70%] h-[50%] bg-orange-600/5 rounded-full blur-[140px] pointer-events-none" />
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(255,138,101,0.03),transparent)] pointer-events-none" />
-            <div className="absolute inset-0 bg-linear-to-b from-transparent via-[#050608]/30 to-[#050608] pointer-events-none" />
+            <div className="absolute top-[-10%] left-[-10%] w-[80%] h-[60%] bg-indigo-600/10 rounded-full blur-[140px] pointer-events-none" />
+            <div className="absolute bottom-[-5%] right-[-5%] w-[70%] h-[50%] bg-emerald-600/5 rounded-full blur-[140px] pointer-events-none" />
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(79,70,229,0.05),transparent)] pointer-events-none" />
+            <div className="absolute inset-0 bg-linear-to-b from-transparent via-background/30 to-background pointer-events-none" />
             
             {/* Top Section: Creative Logo & Typography */}
             <div className="flex flex-col items-center mt-16 z-10">
@@ -1914,20 +2023,20 @@ Reply NO — I cannot reach them`;
                 transition={{ duration: 1, ease: [0.23, 1, 0.32, 1] }}
                 className="relative mb-10"
               >
-                <div className="absolute inset-0 bg-[#FF8A65]/20 blur-2xl rounded-full scale-150 animate-pulse" />
-                <div className="w-28 h-28 bg-linear-to-br from-[#1E2333] to-[#151926] rounded-[2.5rem] flex items-center justify-center shadow-[0_25px_60px_rgba(0,0,0,0.6)] border border-white/10 relative group overflow-hidden">
-                  <div className="absolute top-0 left-0 w-full h-full bg-linear-to-br from-white/10 to-transparent pointer-events-none" />
+                <div className="absolute inset-0 bg-primary/20 blur-2xl rounded-full scale-150 animate-pulse" />
+                <div className="w-28 h-28 bg-linear-to-br from-surface-high to-surface-low rounded-[2.5rem] flex items-center justify-center shadow-[0_25px_60px_rgba(0,0,0,0.6)] border border-outline-variant/30 relative group overflow-hidden">
+                  <div className="absolute top-0 left-0 w-full h-full bg-linear-to-br from-white/5 to-transparent pointer-events-none" />
                   <div className="relative flex items-center justify-center">
-                    <Shield className="w-14 h-14 text-[#FF8A65] drop-shadow-[0_0_20px_rgba(255,138,101,0.6)]" fill="currentColor" fillOpacity={0.15} />
+                    <Shield className="w-14 h-14 text-primary drop-shadow-[0_0_20px_rgba(79,70,229,0.6)]" fill="currentColor" fillOpacity={0.15} />
                     <motion.div 
                       animate={{ y: [0, -2, 0] }}
                       transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
                       className="absolute"
                     >
-                      <Footprints className="w-6 h-6 text-white/90" />
+                      <Footprints className="w-6 h-6 text-on-surface" />
                     </motion.div>
                   </div>
-                  <div className="absolute inset-0 border-2 border-transparent group-hover:border-[#FF8A65]/30 rounded-[2.5rem] transition-all duration-700" />
+                  <div className="absolute inset-0 border-2 border-transparent group-hover:border-primary/30 rounded-[2.5rem] transition-all duration-700" />
                 </div>
               </motion.div>
               
@@ -1939,16 +2048,16 @@ Reply NO — I cannot reach them`;
               >
                 <h1 className="text-[5.5rem] font-hindi font-bold tracking-tight leading-none flex items-baseline select-none relative">
                   <span className="bg-linear-to-b from-white to-gray-400 bg-clip-text text-transparent">स</span>
-                  <span className="text-[4.5rem] -mx-0.5 bg-linear-to-tr from-[#FF8A65] via-[#FFB74D] to-[#FF8A65] bg-clip-text text-transparent font-display font-black italic tracking-tighter drop-shadow-[0_0_20px_rgba(255,138,101,0.3)]">AA</span>
+                  <span className="text-[4.5rem] -mx-0.5 bg-linear-to-tr from-primary via-primary-variant to-primary bg-clip-text text-transparent font-display font-black italic tracking-tighter drop-shadow-[0_0_20px_rgba(79,70,229,0.3)]">AA</span>
                   <span className="bg-linear-to-b from-white to-gray-400 bg-clip-text text-transparent">हस</span>
                 </h1>
                 <motion.div 
                   initial={{ width: 0 }}
                   animate={{ width: "120%" }}
                   transition={{ delay: 1, duration: 1 }}
-                  className="h-px bg-linear-to-r from-transparent via-[#FF8A65]/40 to-transparent mt-4 mb-2"
+                  className="h-px bg-linear-to-r from-transparent via-primary/40 to-transparent mt-4 mb-2"
                 />
-                <p className="text-[10px] uppercase tracking-[0.5em] text-gray-500 font-bold opacity-70">
+                <p className="text-[10px] uppercase tracking-[0.5em] text-on-surface-variant font-bold opacity-70">
                   Your Silence Has a Voice
                 </p>
               </motion.div>
@@ -1963,59 +2072,61 @@ Reply NO — I cannot reach them`;
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.8, duration: 0.8, ease: [0.23, 1, 0.32, 1] }}
                 onClick={() => setCurrentScreen('guest-setup')}
-                className="w-full py-6 bg-linear-to-r from-[#FF8A65] to-[#FFB74D] rounded-[1.25rem] flex items-center justify-center gap-4 text-black font-black text-xl shadow-[0_20px_50px_-10px_rgba(255,138,101,0.6)] relative overflow-hidden group"
+                className="w-full py-6 bg-linear-to-r from-primary to-primary-variant rounded-[1.25rem] flex items-center justify-center gap-4 text-white font-black text-xl shadow-[0_20px_50px_-10px_rgba(79,70,229,0.6)] relative overflow-hidden group animate-pulse-primary"
               >
                 <div className="absolute inset-0 bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
                 <motion.div 
                   className="absolute inset-0 bg-linear-to-r from-transparent via-white/30 to-transparent -translate-x-full group-hover:animate-shimmer"
                   initial={false}
                 />
-                <span className="relative tracking-tight">START WALK NOW</span>
-                <ArrowRight className="w-6 h-6 relative group-hover:translate-x-1 transition-transform" strokeWidth={3} />
+                <span className="relative tracking-tight drop-shadow-md">START WALK NOW</span>
+                <ArrowRight className="w-6 h-6 relative group-hover:translate-x-1 transition-transform drop-shadow-md" strokeWidth={3} />
               </motion.button>
 
               <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 1.2, duration: 1 }}
-                className="grid grid-cols-3 w-full gap-6"
+                className="flex items-center justify-around w-full px-6 py-4 rounded-3xl bg-surface-high/50 backdrop-blur-xl border border-white/5 shadow-2xl"
               >
-                <div className="flex flex-col items-center gap-3 group cursor-pointer">
-                  <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md flex items-center justify-center text-gray-400 group-hover:text-white group-hover:bg-white/10 group-hover:border-white/20 transition-all duration-500 shadow-lg">
-                    <MapPin className="w-6 h-6" />
+                <div className="flex flex-col items-center gap-2 group cursor-pointer w-1/3">
+                  <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-on-surface-variant group-hover:text-primary group-hover:bg-primary/10 transition-all duration-300">
+                    <MapPin className="w-5 h-5 group-hover:scale-110 transition-transform" />
                   </div>
-                  <span className="text-[9px] uppercase tracking-[0.2em] text-gray-500 font-black group-hover:text-gray-300 transition-colors">Live GPS</span>
+                  <span className="text-[9px] uppercase tracking-wider text-on-surface-variant font-bold group-hover:text-on-surface transition-colors">Live GPS</span>
                 </div>
-                <div className="flex flex-col items-center gap-3 group cursor-pointer">
-                  <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md flex items-center justify-center text-gray-400 group-hover:text-[#FF8A65] group-hover:bg-white/10 group-hover:border-[#FF8A65]/30 transition-all duration-500 shadow-lg">
-                    <Bell className="w-6 h-6" />
+                <div className="flex flex-col items-center gap-2 group cursor-pointer w-1/3 border-l border-r border-white/5">
+                  <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-on-surface-variant group-hover:text-danger group-hover:bg-danger/10 transition-all duration-300">
+                    <Bell className="w-5 h-5 group-hover:scale-110 transition-transform" />
                   </div>
-                  <span className="text-[9px] uppercase tracking-[0.2em] text-gray-500 font-black group-hover:text-gray-300 transition-colors">SOS Alert</span>
+                  <span className="text-[9px] uppercase tracking-wider text-on-surface-variant font-bold group-hover:text-on-surface transition-colors">SOS Alert</span>
                 </div>
-                <div className="flex flex-col items-center gap-3 group cursor-pointer">
-                  <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md flex items-center justify-center text-gray-400 group-hover:text-white group-hover:bg-white/10 group-hover:border-white/20 transition-all duration-500 shadow-lg">
-                    <Users className="w-6 h-6" />
+                <div className="flex flex-col items-center gap-2 group cursor-pointer w-1/3">
+                  <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-on-surface-variant group-hover:text-success group-hover:bg-success/10 transition-all duration-300">
+                    <Users className="w-5 h-5 group-hover:scale-110 transition-transform" />
                   </div>
-                  <span className="text-[9px] uppercase tracking-[0.2em] text-gray-500 font-black group-hover:text-gray-300 transition-colors">Safe Network</span>
+                  <span className="text-[9px] uppercase tracking-wider text-on-surface-variant font-bold group-hover:text-on-surface transition-colors">Safe Network</span>
                 </div>
               </motion.div>
             </div>
 
             {/* Bottom Section: Footer Link */}
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 1.5, duration: 0.8 }}
-              className="mb-10 z-10"
-            >
-              <button 
-                onClick={() => setCurrentScreen('profile-setup')}
-                className="flex items-center gap-2 text-gray-500 hover:text-white transition-all duration-500 text-sm font-bold tracking-widest group"
+            {!loggedInUserName && (
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 1.5, duration: 0.8 }}
+                className="mb-8 mt-auto z-10"
               >
-                Login / Setup Profile
-                <ChevronRight className="w-4 h-4 group-hover:translate-x-1.5 transition-transform duration-300" />
-              </button>
-            </motion.div>
+                <button 
+                  onClick={() => setCurrentScreen('profile-setup')}
+                  className="flex items-center gap-2 text-on-surface-variant hover:text-white transition-all duration-500 text-sm font-bold tracking-widest group"
+                >
+                  Login / Setup Profile
+                  <ChevronRight className="w-4 h-4 group-hover:translate-x-1.5 transition-transform duration-300" />
+                </button>
+              </motion.div>
+            )}
           </motion.div>
         ) : currentScreen === 'profile-setup' ? (
           <motion.div
@@ -2101,25 +2212,40 @@ Reply NO — I cannot reach them`;
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="group">
                       <label className="block font-label text-xs text-on-surface-variant mb-2 font-medium">Emergency Contact 1</label>
-                      <input 
-                        className="w-full bg-surface-container border border-outline-variant/15 rounded-xl px-4 py-3 focus:border-primary/40 outline-none text-on-surface" 
-                        placeholder="+1 (555) 000-0000" 
-                        type="tel"
-                        value={profileData.contact1Phone}
-                        onChange={(e) => setProfileData({ ...profileData, contact1Phone: e.target.value })}
-                      />
+                      <div className={`flex items-center w-full bg-surface-container border rounded-xl px-4 py-3 transition-colors ${profileContact1Digits.length > 0 && profileContact1Digits.length < INDIAN_PHONE_LENGTH ? 'border-[#FF6B00]' : 'border-outline-variant/15 focus-within:border-primary/40'}`}>
+                        <span className="text-on-surface-variant font-semibold shrink-0">+91</span>
+                        <span className="mx-3 h-5 w-px bg-white/10 shrink-0" />
+                        <input 
+                          className="w-full bg-transparent outline-none text-on-surface" 
+                          placeholder="9876543210"
+                          type="tel"
+                          inputMode="numeric"
+                          autoComplete="tel-national"
+                          maxLength={INDIAN_PHONE_LENGTH}
+                          value={profileContact1Digits}
+                          onChange={(e) => setProfileData({ ...profileData, contact1Phone: normalizeIndianPhoneInput(e.target.value) })}
+                        />
+                      </div>
                     </div>
                     <div className="group">
                       <label className="block font-label text-xs text-on-surface-variant mb-2 font-medium">Emergency Contact 2</label>
-                      <input 
-                        className="w-full bg-surface-container border border-outline-variant/15 rounded-xl px-4 py-3 focus:border-primary/40 outline-none text-on-surface" 
-                        placeholder="+1 (555) 000-0000" 
-                        type="tel"
-                        value={profileData.contact2Phone}
-                        onChange={(e) => setProfileData({ ...profileData, contact2Phone: e.target.value })}
-                      />
+                      <div className={`flex items-center w-full bg-surface-container border rounded-xl px-4 py-3 transition-colors ${profileContact2Digits.length > 0 && profileContact2Digits.length < INDIAN_PHONE_LENGTH ? 'border-[#FF6B00]' : 'border-outline-variant/15 focus-within:border-primary/40'}`}>
+                        <span className="text-on-surface-variant font-semibold shrink-0">+91</span>
+                        <span className="mx-3 h-5 w-px bg-white/10 shrink-0" />
+                        <input 
+                          className="w-full bg-transparent outline-none text-on-surface" 
+                          placeholder="9876543210"
+                          type="tel"
+                          inputMode="numeric"
+                          autoComplete="tel-national"
+                          maxLength={INDIAN_PHONE_LENGTH}
+                          value={profileContact2Digits}
+                          onChange={(e) => setProfileData({ ...profileData, contact2Phone: normalizeIndianPhoneInput(e.target.value) })}
+                        />
+                      </div>
                     </div>
                   </div>
+                  <p className="text-[11px] text-on-surface-variant/70 -mt-2">Emergency contact numbers are required in 10 digits. +91 is added automatically.</p>
                   <div className="group">
                     <label className="block font-label text-xs text-on-surface-variant mb-2 font-medium">Guardian Contact Name</label>
                     <input 
@@ -2208,7 +2334,8 @@ Reply NO — I cannot reach them`;
                     onClick={() => {
                       handleSaveProfile();
                     }}
-                    className="w-full bg-linear-to-br from-primary to-tertiary py-5 rounded-2xl text-on-primary font-headline font-bold text-lg tracking-wide shadow-lg shadow-primary/20 active:scale-[0.98] transition-all flex items-center justify-center gap-3" 
+                    disabled={!profileEmergencyContactsValid}
+                    className={`w-full py-5 rounded-2xl text-on-primary font-headline font-bold text-lg tracking-wide shadow-lg shadow-primary/20 transition-all flex items-center justify-center gap-3 ${profileEmergencyContactsValid ? 'bg-linear-to-br from-primary to-tertiary active:scale-[0.98]' : 'bg-white/10 text-white/40 shadow-none cursor-not-allowed'}`} 
                     type="button"
                   >
                     <ShieldCheck className="w-6 h-6" />
@@ -2286,7 +2413,22 @@ Reply NO — I cannot reach them`;
                 >
                   <ArrowLeft className="w-5 h-5 text-white" />
                 </button>
-                <span className="text-sm font-bold tracking-[0.2em] text-white uppercase font-headline">सAAहस</span>
+                <div className="flex items-center gap-2">
+                  <div className="relative w-5 h-5 flex items-center justify-center">
+                    <motion.div
+                      animate={{ rotate: 360 }}
+                      transition={{ repeat: Infinity, duration: 6, ease: "linear" }}
+                      className="absolute inset-0 bg-gradient-to-tr from-primary/35 via-transparent to-primary/35 rounded-full scale-150 blur-xs"
+                    />
+                    <motion.div
+                      animate={{ scale: [0.95, 1.25, 0.95], opacity: [0.5, 0.9, 0.5] }}
+                      transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+                      className="absolute inset-0 bg-primary/15 rounded-full"
+                    />
+                    <Shield className="w-4 h-4 text-primary relative z-10 drop-shadow-[0_0_8px_rgba(79,70,229,0.7)] animate-pulse" />
+                  </div>
+                  <span className="text-sm font-bold tracking-[0.2em] text-white uppercase font-headline">सAAहस</span>
+                </div>
               </div>
               <div className="flex items-center gap-2 px-3 py-1 bg-red-500/10 rounded-full border border-red-500/20">
                 <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
@@ -2601,20 +2743,29 @@ Reply NO — I cannot reach them`;
             </div>
 
             {/* PIN Boxes */}
-            <div className="flex justify-center gap-3 mb-4">
+            <div className="flex justify-center gap-3 mb-4 relative">
+              {pinSuccess && (
+                <motion.div 
+                  initial={{ scale: 0.8, opacity: 0.6 }}
+                  animate={{ scale: 3.5, opacity: 0 }}
+                  transition={{ duration: 0.7, ease: "easeOut" }}
+                  className="absolute inset-0 bg-[#00C853]/30 rounded-full blur-xl pointer-events-none z-0"
+                />
+              )}
               {[0, 1, 2, 3].map((i) => (
                 <motion.div
                   key={i}
                   animate={pinSuccess ? { scale: [1, 1.08, 1] } : pinError ? { x: [0, -10, 10, -10, 10, 0] } : {}}
-                  className={`w-16 h-20 rounded-2xl border-2 flex items-center justify-center transition-all duration-300 ${
+                  transition={pinError ? { duration: 0.4, ease: "easeInOut" } : { duration: 0.3 }}
+                  className={`w-16 h-20 rounded-2xl border-2 flex items-center justify-center transition-all duration-300 z-10 ${
                     pinSuccess
-                    ? 'border-[#00C853] bg-[#00C853]/10'
+                    ? 'border-[#00C853] bg-[#00C853]/10 shadow-[0_0_30px_rgba(0,200,83,0.3)]'
                     : pinAttempt.length > i 
                     ? 'bg-white/5 border-white/20' 
                     : pinAttempt.length === i 
                     ? 'bg-white/5 border-orange-500/50 shadow-[0_0_20px_rgba(255,143,120,0.1)]' 
                     : 'bg-white/5 border-white/10'
-                  } ${pinError ? 'border-[#FF3B30] bg-[#FF3B30]/10' : ''}`}
+                  } ${pinError ? 'border-[#FF3B30] bg-[#FF3B30]/20 shadow-[0_0_30px_rgba(255,59,48,0.4)] animate-pulse' : ''}`}
                 >
                   {pinSuccess ? (
                     <motion.div
@@ -2709,47 +2860,77 @@ Reply NO — I cannot reach them`;
             {/* Map Section */}
             <div className="px-6 mb-6">
               <div className="relative w-full h-65 bg-[#0d1117] rounded-3xl overflow-hidden border border-[#333] shadow-2xl">
-                {/* Simulated Map Background */}
-                <div className="absolute inset-0 opacity-30">
-                  <div className="absolute inset-0" style={{
-                    backgroundImage: 'radial-gradient(circle at 2px 2px, #333 1px, transparent 0)',
-                    backgroundSize: '24px 24px'
-                  }} />
-                  <div className="absolute top-1/4 left-1/3 w-20 h-1 bg-[#222] rotate-45" />
-                  <div className="absolute top-1/2 right-1/4 w-32 h-1 bg-[#222] -rotate-12" />
-                  <div className="absolute bottom-1/4 left-1/2 w-40 h-1 bg-[#222] rotate-90" />
-                </div>
-
-                {/* User Location Dot & Ripple */}
-                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
-                  {/* Ripple Rings */}
-                  {[0, 1, 2].map((i) => (
-                    <motion.div
-                      key={i}
-                      initial={{ scale: 1, opacity: 0.6 }}
-                      animate={{ scale: 3, opacity: 0 }}
-                      transition={{
-                        repeat: Infinity,
-                        duration: 3,
-                        delay: i * 1,
-                        ease: "easeOut"
-                      }}
-                      className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full border border-[#FF3B3060]"
+                {shadowMapEmbedUrl ? (
+                  <>
+                    <iframe
+                      key={shadowMapEmbedUrl}
+                      title="Shadow Mode Live Location"
+                      src={shadowMapEmbedUrl}
+                      loading="lazy"
+                      referrerPolicy="no-referrer-when-downgrade"
+                      className="absolute inset-0 h-full w-full border-0 pointer-events-none saturate-[0.9] contrast-110 brightness-[0.78]"
                     />
-                  ))}
-                  {/* Core Dot */}
-                  <div className="w-4 h-4 bg-[#FF3B30] rounded-full shadow-[0_0_15px_#FF3B30] border-2 border-white relative z-10" />
-                </div>
+                    <div className="absolute inset-0 bg-linear-to-b from-[#050608]/10 via-transparent to-[#050608]/35 pointer-events-none" />
+                  </>
+                ) : (
+                  <div className="absolute inset-0 bg-linear-to-br from-[#0a1017] via-[#0d1117] to-[#131a24] flex items-center justify-center">
+                    <div className="text-center px-6">
+                      <div className="w-10 h-10 mx-auto mb-3 border-4 border-white/10 border-t-[#FF6B00] rounded-full animate-spin" />
+                      <p className="text-[14px] text-white font-semibold">Waiting for live GPS lock...</p>
+                      <p className="text-[12px] text-[#888] mt-1">The map will appear as soon as location is available.</p>
+                    </div>
+                  </div>
+                )}
 
-                {/* Scale Indicator */}
-                <div className="absolute bottom-4 left-4 flex flex-col gap-1">
-                  <div className="text-[10px] text-[#888] font-mono">0 ——— 500m</div>
+                <div
+                  className="absolute inset-0 opacity-15 pointer-events-none"
+                  style={{
+                    backgroundImage: 'radial-gradient(circle at 2px 2px, rgba(255,255,255,0.22) 1px, transparent 0)',
+                    backgroundSize: '24px 24px'
+                  }}
+                />
+
+                {shadowMapPoint && (
+                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
+                    {/* Ripple Rings */}
+                    {[0, 1, 2].map((i) => (
+                      <motion.div
+                        key={i}
+                        initial={{ scale: 1, opacity: 0.6 }}
+                        animate={{ scale: 3, opacity: 0 }}
+                        transition={{
+                          repeat: Infinity,
+                          duration: 3,
+                          delay: i * 1,
+                          ease: "easeOut"
+                        }}
+                        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full border border-[#FF3B3060]"
+                      />
+                    ))}
+                    {/* Core Dot */}
+                    <div className="w-4 h-4 bg-[#FF3B30] rounded-full shadow-[0_0_15px_#FF3B30] border-2 border-white relative z-10" />
+                  </div>
+                )}
+
+                {/* Location Label */}
+                <div className="absolute bottom-4 left-4 max-w-[70%] rounded-2xl bg-black/45 backdrop-blur-md px-3 py-2 border border-white/10">
+                  <div className="text-[10px] text-white/70 uppercase tracking-[0.18em] font-bold">Current Location</div>
+                  <div className="text-[12px] text-white font-semibold truncate">
+                    {shadowMapPoint?.label || currentLocation}
+                  </div>
+                  {shadowMapPoint && (
+                    <div className="text-[10px] text-white/55 font-mono mt-0.5">
+                      {shadowMapPoint.lat.toFixed(5)}, {shadowMapPoint.lng.toFixed(5)}
+                    </div>
+                  )}
                 </div>
 
                 {/* Live Badge */}
                 <div className="absolute top-4 right-4 bg-black/40 backdrop-blur-md px-2 py-1 rounded-full flex items-center gap-1.5 border border-white/10">
-                  <div className="w-1.5 h-1.5 bg-[#00C853] rounded-full animate-pulse" />
-                  <span className="text-[10px] font-bold text-white uppercase tracking-wider">Live</span>
+                  <div className={`w-1.5 h-1.5 rounded-full ${shadowMapPoint ? 'bg-[#00C853] animate-pulse' : 'bg-[#FFB74D]'}`} />
+                  <span className="text-[10px] font-bold text-white uppercase tracking-wider">
+                    {shadowMapPoint ? 'Live' : 'Locating'}
+                  </span>
                 </div>
               </div>
             </div>
@@ -3244,100 +3425,170 @@ Reply NO — I cannot reach them`;
                 <h1 className="font-headline font-bold text-2xl tracking-tight text-white">सAAहस</h1>
                 <p className="font-sans text-on-surface-variant text-[10px] uppercase tracking-widest mt-0.5">Takes 30 seconds. Keeps you safe.</p>
               </div>
-              <div className="w-10 h-10 rounded-full border border-outline-variant/20 flex items-center justify-center bg-surface-low">
-                <Shield className="w-5 h-5 text-primary" fill="currentColor" fillOpacity={0.2} />
+              <div className="w-10 h-10 rounded-full border border-outline-variant/20 flex items-center justify-center bg-surface-low relative overflow-hidden">
+                <motion.div
+                  animate={{ scale: [0.95, 1.15, 0.95] }}
+                  transition={{ repeat: Infinity, duration: 3, ease: "easeInOut" }}
+                  className="absolute inset-0 bg-primary/10 rounded-full"
+                />
+                <Shield className="w-5 h-5 text-primary relative z-10 animate-pulse" fill="currentColor" fillOpacity={0.2} />
               </div>
             </header>
 
-            <main className="flex-1 px-6 pt-4 pb-32 overflow-y-auto">
-              <div className="space-y-8">
+            <main className="flex-1 w-full max-w-xl mx-auto px-4 sm:px-6 py-6 sm:py-10 overflow-y-auto">
+              <div className="bg-surface-high/40 backdrop-blur-2xl border border-white/5 rounded-3xl p-6 sm:p-8 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.5)] space-y-8 relative overflow-hidden">
+                {/* Decorative inner glow for the card */}
+                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-3/4 h-24 bg-primary/10 blur-[60px] pointer-events-none" />
+                
                 {/* User Info Section */}
-                <div className="space-y-6">
+                <div className="space-y-6 relative z-10">
                   <div className="relative">
-                    <label className="absolute -top-2 left-3 px-1 bg-background text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold">Your Name</label>
+                    <label className="absolute -top-2 left-3 px-1 bg-surface-high/80 backdrop-blur-sm text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold rounded">Your Name</label>
                     <input 
                       type="text" 
                       placeholder="Enter your full name"
                       value={guestData.name}
                       onChange={(e) => setGuestData({ ...guestData, name: e.target.value })}
-                      className="w-full bg-surface-low border border-outline-variant/30 rounded-xl px-4 py-4 text-on-surface placeholder:text-on-surface-variant/40 focus:border-primary/40 focus:outline-none transition-all font-body"
+                      className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-4 text-on-surface placeholder:text-on-surface-variant/40 focus:border-primary focus:ring-1 focus:ring-primary focus:outline-none transition-all shadow-inner font-body"
                     />
                   </div>
                   <div className="relative">
-                    <label className="absolute -top-2 left-3 px-1 bg-background text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold">Your Phone Number</label>
+                    <label className="absolute -top-2 left-3 px-1 bg-surface-high/80 backdrop-blur-sm text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold rounded">Your Phone Number</label>
                     <input 
                       type="tel" 
                       placeholder="+91 00000 00000"
                       value={guestData.phone}
                       onChange={(e) => setGuestData({ ...guestData, phone: e.target.value })}
-                      className="w-full bg-surface-low border border-outline-variant/30 rounded-xl px-4 py-4 text-on-surface placeholder:text-on-surface-variant/40 focus:border-primary/40 focus:outline-none transition-all font-body"
+                      className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-4 text-on-surface placeholder:text-on-surface-variant/40 focus:border-primary focus:ring-1 focus:ring-primary focus:outline-none transition-all shadow-inner font-body"
                     />
                   </div>
-                  <div className="relative">
-                    <label className="absolute -top-2 left-3 px-1 bg-background text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold">Emergency Contact 1</label>
-                    <input 
-                      type="tel" 
-                      placeholder="+91 00000 00000"
-                      value={guestData.contact1}
-                      onChange={(e) => setGuestData({ ...guestData, contact1: e.target.value })}
-                      className="w-full bg-surface-low border border-outline-variant/30 rounded-xl px-4 py-4 text-on-surface placeholder:text-on-surface-variant/40 focus:border-primary/40 focus:outline-none transition-all font-body"
-                    />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 sm:gap-4">
+                    <div className="relative">
+                      <label className="absolute -top-2 left-3 px-1 bg-surface-high/80 backdrop-blur-sm text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold rounded">Emergency Contact 1</label>
+                      <div className={`w-full bg-surface-low/80 border rounded-xl px-4 py-4 flex items-center transition-all shadow-inner ${guestContact1Digits.length > 0 && guestContact1Digits.length < INDIAN_PHONE_LENGTH ? 'border-danger' : 'border-outline-variant/30 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary'}`}>
+                        <span className="text-on-surface-variant font-semibold shrink-0">+91</span>
+                        <span className="mx-3 h-5 w-px bg-white/10 shrink-0" />
+                        <input 
+                          type="tel"
+                          inputMode="numeric"
+                          autoComplete="tel-national"
+                          maxLength={INDIAN_PHONE_LENGTH}
+                          placeholder="9876543210"
+                          value={guestContact1Digits}
+                          onChange={(e) => setGuestData({ ...guestData, contact1: normalizeIndianPhoneInput(e.target.value) })}
+                          className="w-full bg-transparent text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none transition-all font-body min-w-0"
+                        />
+                      </div>
+                    </div>
+                    <div className="relative">
+                      <label className="absolute -top-2 left-3 px-1 bg-surface-high/80 backdrop-blur-sm text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold rounded">Emergency Contact 2</label>
+                      <div className={`w-full bg-surface-low/80 border rounded-xl px-4 py-4 flex items-center transition-all shadow-inner ${guestContact2Digits.length > 0 && guestContact2Digits.length < INDIAN_PHONE_LENGTH ? 'border-danger' : 'border-outline-variant/30 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary'}`}>
+                        <span className="text-on-surface-variant font-semibold shrink-0">+91</span>
+                        <span className="mx-3 h-5 w-px bg-white/10 shrink-0" />
+                        <input 
+                          type="tel"
+                          inputMode="numeric"
+                          autoComplete="tel-national"
+                          maxLength={INDIAN_PHONE_LENGTH}
+                          placeholder="9876543210"
+                          value={guestContact2Digits}
+                          onChange={(e) => setGuestData({ ...guestData, contact2: normalizeIndianPhoneInput(e.target.value) })}
+                          className="w-full bg-transparent text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none transition-all font-body min-w-0"
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <div className="relative">
-                    <label className="absolute -top-2 left-3 px-1 bg-background text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold">Emergency Contact 2</label>
-                    <input 
-                      type="tel" 
-                      placeholder="+91 00000 00000"
-                      value={guestData.contact2}
-                      onChange={(e) => setGuestData({ ...guestData, contact2: e.target.value })}
-                      className="w-full bg-surface-low border border-outline-variant/30 rounded-xl px-4 py-4 text-on-surface placeholder:text-on-surface-variant/40 focus:border-primary/40 focus:outline-none transition-all font-body"
-                    />
-                  </div>
-                  <button
+                  <p className="text-[11px] text-on-surface-variant/70 -mt-2">Emergency contacts must be 10 digits. +91 is fixed by default.</p>
+                  <motion.button
                     type="button"
+                    whileHover={{ scale: guestEmergencyContactsValid && !isSendingNotification ? 1.02 : 1 }}
+                    whileTap={{ scale: guestEmergencyContactsValid && !isSendingNotification ? 0.95 : 1 }}
                     onClick={handleSendNotification}
-                    className="w-full py-4 rounded-xl bg-linear-to-r from-primary to-tertiary text-on-primary font-headline font-bold tracking-wider active:scale-95 transition-all"
+                    disabled={!guestEmergencyContactsValid || isSendingNotification}
+                    className={`w-full py-4 rounded-xl font-headline font-bold tracking-wider relative overflow-hidden transition-all duration-300 ${
+                      guestEmergencyContactsValid 
+                        ? 'bg-primary/20 text-primary border border-primary/50 hover:bg-primary/30 shadow-[0_0_20px_rgba(79,70,229,0.15)] animate-pulse-primary' 
+                        : 'bg-surface-highest border border-outline-variant/30 text-white/40 cursor-not-allowed'
+                    }`}
                   >
-                    SEND NOTIFICATION
-                  </button>
+                    <AnimatePresence mode="wait">
+                      {isSendingNotification ? (
+                        <motion.div 
+                          key="loading"
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -10 }}
+                          transition={{ ease: "easeOut", duration: 0.2 }}
+                          className="absolute inset-0 flex items-center justify-center gap-2"
+                        >
+                          <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                          <span className="text-xs font-semibold uppercase tracking-wider text-primary">Sending WhatsApp...</span>
+                        </motion.div>
+                      ) : (
+                        <motion.span
+                          key="text"
+                          initial={{ opacity: 0, y: -10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 10 }}
+                          transition={{ ease: "easeOut", duration: 0.2 }}
+                        >
+                          SEND NOTIFICATION
+                        </motion.span>
+                      )}
+                    </AnimatePresence>
+                  </motion.button>
                 </div>
 
                 {/* Walk Duration Selector */}
-                <div className="space-y-4">
+                <div className="space-y-4 relative z-10 pt-2 border-t border-white/5">
                   <h3 className="font-headline font-semibold text-sm uppercase tracking-wider text-on-surface/80">Walk Duration</h3>
-                  <div className="grid grid-cols-5 gap-2">
-                    {[5, 10, 15, 30].map((min) => (
-                      <button
-                        key={min}
-                        onClick={() => setGuestData({ ...guestData, duration: min, isCustom: false })}
-                        className={`py-3 rounded-xl border transition-all active:scale-95 text-sm font-headline font-bold ${
-                          !guestData.isCustom && guestData.duration === min 
-                          ? 'bg-linear-to-br from-primary to-tertiary text-on-primary border-transparent shadow-[0_0_32px_rgba(255,143,120,0.15)]' 
-                          : 'bg-surface-low border-outline-variant/30 text-on-surface hover:border-primary/50'
-                        }`}
-                      >
-                        {min}m
-                      </button>
-                    ))}
+                  <div className="grid grid-cols-5 gap-2 relative bg-surface-low/80 p-1.5 rounded-2xl border border-outline-variant/20">
+                    {[5, 10, 15, 30].map((min) => {
+                      const isActive = !guestData.isCustom && guestData.duration === min;
+                      return (
+                        <button
+                          key={min}
+                          onClick={() => setGuestData({ ...guestData, duration: min, isCustom: false })}
+                          className={`relative py-3 rounded-xl transition-colors duration-300 text-sm font-headline font-bold z-10 focus:outline-none ${
+                            isActive ? 'text-white' : 'text-on-surface-variant hover:text-on-surface'
+                          }`}
+                        >
+                          {isActive && (
+                            <motion.div 
+                              layoutId="duration-indicator" 
+                              className="absolute inset-0 bg-primary rounded-xl -z-10 shadow-[0_0_20px_rgba(79,70,229,0.55)] border border-primary-variant/30" 
+                              transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                            />
+                          )}
+                          {min}m
+                        </button>
+                      );
+                    })}
                     <button 
                       onClick={() => setGuestData({ ...guestData, isCustom: true })}
-                      className={`py-3 rounded-xl border transition-all active:scale-95 text-xs font-headline font-bold ${
-                        guestData.isCustom 
-                        ? 'bg-linear-to-br from-primary to-tertiary text-on-primary border-transparent shadow-[0_0_32px_rgba(255,143,120,0.15)]' 
-                        : 'bg-surface-low border-outline-variant/30 text-on-surface hover:border-primary/50'
+                      className={`relative py-3 rounded-xl transition-colors duration-300 text-xs font-headline font-bold z-10 focus:outline-none ${
+                        guestData.isCustom ? 'text-white' : 'text-on-surface-variant hover:text-on-surface'
                       }`}
                     >
+                      {guestData.isCustom && (
+                        <motion.div 
+                          layoutId="duration-indicator" 
+                          className="absolute inset-0 bg-primary rounded-xl -z-10 shadow-[0_0_20px_rgba(79,70,229,0.55)] border border-primary-variant/30" 
+                          transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                        />
+                      )}
                       Custom
                     </button>
                   </div>
 
                   {/* Custom Time Input */}
-                  <AnimatePresence>
+                  <AnimatePresence mode="wait">
                     {guestData.isCustom && (
                       <motion.div 
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: 'auto' }}
-                        exit={{ opacity: 0, height: 0 }}
+                        initial={{ opacity: 0, height: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, height: 'auto', scale: 1 }}
+                        exit={{ opacity: 0, height: 0, scale: 0.95 }}
+                        transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }} // Custom easeOut
                         className="overflow-hidden"
                       >
                         <div className="mt-3 flex items-center gap-3 p-4 bg-surface-high/30 rounded-2xl border border-outline-variant/20">
@@ -3375,7 +3626,7 @@ Reply NO — I cannot reach them`;
                 </div>
 
                 {/* PIN Creation Section */}
-                <div className="space-y-4">
+                <div className="space-y-4 relative z-10 pt-2 border-t border-white/5">
                   <div className="flex flex-col space-y-1">
                     <h3 className="font-headline font-semibold text-sm uppercase tracking-wider text-on-surface/80">Create Your Safety PIN</h3>
                     <p className="font-sans text-on-surface-variant text-[11px] font-medium">Only this PIN ends your walk safely. Keep it secret.</p>
@@ -3390,14 +3641,14 @@ Reply NO — I cannot reach them`;
                         maxLength={1}
                         value={digit}
                         onChange={(e) => handleGuestPinChange(i, e.target.value)}
-                        className="w-14 h-16 bg-surface-highest border border-outline-variant/30 rounded-xl text-center text-2xl font-bold text-primary focus:ring-1 focus:ring-primary/40 focus:outline-none transition-all"
+                        className="w-14 h-16 bg-surface-highest border border-outline-variant/30 rounded-xl text-center text-2xl font-bold text-primary focus:ring-1 focus:ring-primary/40 focus:outline-none transition-all shadow-inner"
                       />
                     ))}
                   </div>
                 </div>
 
                 {/* Visual Context - Informational Card */}
-                <div className="bg-surface-high/50 p-5 rounded-2xl border border-outline-variant/10 flex items-start gap-4">
+                <div className="bg-surface-highest/60 p-5 rounded-2xl border border-outline-variant/10 flex items-start gap-4 relative z-10">
                   <div className="w-10 h-10 rounded-full bg-primary/10 shrink-0 flex items-center justify-center">
                     <MapPin className="w-5 h-5 text-primary" />
                   </div>
@@ -3406,26 +3657,69 @@ Reply NO — I cannot reach them`;
                     <p className="font-body text-xs text-on-surface-variant mt-1 leading-relaxed">Your selected contacts will receive a live tracking link once you begin. They'll be alerted if the timer expires without your PIN.</p>
                   </div>
                 </div>
+
+                {/* Start Action */}
+                <div className="pt-6 mt-6 border-t border-white/5 relative z-10">
+                  <motion.button
+                    whileHover={{ scale: guestEmergencyContactsValid && !isStartingWalk ? 1.02 : 1 }}
+                    whileTap={{ scale: guestEmergencyContactsValid && !isStartingWalk ? 0.95 : 1 }}
+                    onClick={() => {
+                      const duration = guestData.isCustom 
+                        ? (guestData.customHours * 60) + guestData.customMinutes 
+                        : guestData.duration;
+                      startWalk(duration);
+                    }}
+                    disabled={!guestEmergencyContactsValid || isStartingWalk}
+                    className={`w-full py-5 rounded-xl font-headline font-extrabold tracking-widest text-base transition-all flex items-center justify-center gap-3 shadow-lg relative overflow-hidden ${
+                      guestEmergencyContactsValid 
+                        ? 'bg-linear-to-r from-primary to-primary-variant text-white shadow-primary/40 animate-pulse-primary' 
+                        : 'bg-surface-highest text-on-surface-variant/50 shadow-none cursor-not-allowed border border-outline-variant/30'
+                    }`}
+                  >
+                    <AnimatePresence mode="wait">
+                      {isStartingWalk ? (
+                        <motion.div 
+                          key="starting"
+                          initial={{ opacity: 0, scale: 0.9 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.9 }}
+                          transition={{ ease: "easeOut", duration: 0.2 }}
+                          className="absolute inset-0 flex items-center justify-center gap-2 bg-linear-to-r from-primary to-primary-variant"
+                        >
+                          <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          <span className="text-sm font-extrabold tracking-widest text-white uppercase">SECURING WALK...</span>
+                        </motion.div>
+                      ) : (
+                        <motion.div
+                          key="idle"
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          transition={{ ease: "easeOut", duration: 0.2 }}
+                          className="flex items-center gap-3"
+                        >
+                          START WALKING
+                          <ArrowRight className="w-5 h-5" strokeWidth={3} />
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </motion.button>
+                </div>
               </div>
             </main>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-            {/* Fixed Bottom Action Bar */}
-            <footer className="fixed bottom-0 left-0 w-full p-6 bg-linear-to-t from-background via-background to-transparent pt-12 z-20">
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={() => {
-                  const duration = guestData.isCustom 
-                    ? (guestData.customHours * 60) + guestData.customMinutes 
-                    : guestData.duration;
-                  startWalk(duration);
-                }}
-                className="w-full py-5 rounded-full bg-linear-to-r from-primary to-tertiary text-on-primary font-headline font-extrabold tracking-widest text-base shadow-[0_8px_30px_rgba(255,143,120,0.3)] active:scale-95 transition-all flex items-center justify-center gap-3"
-              >
-                START WALKING
-                <ArrowRight className="w-5 h-5" strokeWidth={3} />
-              </motion.button>
-            </footer>
+      <AnimatePresence>
+        {showToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 24 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[140] px-5 py-3 rounded-full bg-[#FF8A65]/12 border border-[#FF8A65]/40 text-white shadow-2xl backdrop-blur-md"
+          >
+            <p className="text-xs font-bold tracking-wide whitespace-nowrap">{toastMessage}</p>
           </motion.div>
         )}
       </AnimatePresence>

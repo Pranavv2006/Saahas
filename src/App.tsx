@@ -3,13 +3,53 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Shield, MapPin, Bell, Users, ChevronRight, ArrowRight, Footprints, ArrowLeft, Home, User, Edit, CheckCircle, ChevronDown, Search, ShieldCheck, AlertTriangle, X, Menu, Clock, Ruler, Activity, HeartPulse, Camera, Plus, Trash2, Navigation, UserCheck, ShieldAlert, Delete, Phone, PhoneOff, Mic, Volume2 } from 'lucide-react';
+import { Shield, MapPin, Bell, Users, ChevronRight, ArrowRight, Footprints, ArrowLeft, Home, User, Edit, CheckCircle, ChevronDown, Search, ShieldCheck, AlertTriangle, X, Menu, Clock, Ruler, Activity, HeartPulse, Camera, Plus, Trash2, Navigation, UserCheck, ShieldAlert, Delete, Phone, PhoneOff, Mic, Volume2, Mail, KeyRound } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import React, { useState, useEffect, useRef } from 'react';
 
-type Screen = 'landing' | 'guest-setup' | 'profile-setup' | 'active-walk' | 'walk-complete' | 'fake-call' | 'alert-sent' | 'pin-confirm' | 'shadow-mode' | 'fake-call-pin-confirm';
+type Screen = 'landing' | 'guest-setup' | 'profile-setup' | 'active-walk' | 'walk-complete' | 'fake-call' | 'alert-sent' | 'pin-confirm' | 'shadow-mode' | 'fake-call-pin-confirm' | 'guard-routine-setup' | 'guard-routine-grace';
 type GaitBadgeStatus = 'active' | 'anomaly' | 'unavailable';
-type GaitAlertType = 'person_fell' | 'phone_fallen' | 'struggle_detected' | 'sudden_stop' | 'extreme_deviation' | 'prolonged_still';
+type GaitAlertType = 'person_fell' | 'phone_fallen' | 'phone_snatched' | 'struggle_detected' | 'sudden_stop' | 'extreme_deviation' | 'prolonged_still';
+type GuardRoutineTrigger = 'schedule' | 'geofence' | 'gait';
+type ActiveWalkSource = 'manual' | 'guard-routine';
+type PinConfirmMode = 'safe-arrival' | 'snatch-check';
+
+type GuardRoutine = {
+  enabled: boolean;
+  name: string;
+  trigger: GuardRoutineTrigger;
+  days: number[];
+  startTime: string;
+  durationMinutes: number;
+  graceSeconds: number;
+  lastTriggeredKey: string | null;
+  originLabel: string;
+  originLat: number | null;
+  originLng: number | null;
+  geofenceRadiusMeters: number;
+  geofenceEarliestTime: string;
+  gaitWindowStart: string;
+  gaitWindowEnd: string;
+  gaitRequiredSeconds: number;
+};
+
+type PendingGuardRoutine = {
+  routineName: string;
+  trigger: GuardRoutineTrigger;
+  triggerLabel: string;
+  startedAt: number;
+  graceEndsAt: number;
+  durationMinutes: number;
+  walkId: string;
+};
+
+type StartWalkOptions = {
+  source?: ActiveWalkSource;
+  walkIdOverride?: string;
+  triggerLabel?: string;
+  notifyAlliesOnStart?: boolean;
+  skipDelay?: boolean;
+};
 
 type GaitReading = {
   time: number;
@@ -82,6 +122,98 @@ type SaahasRuntime = {
     gaitData: Record<string, unknown> | null;
     messageBody: string | null;
   };
+};
+
+const GUARD_ROUTINE_STORAGE_KEY = 'saahas_guard_routine';
+const PENDING_GUARD_ROUTINE_STORAGE_KEY = 'saahas_pending_guard_routine';
+const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const WEEKDAY_NUMBERS = [1, 2, 3, 4, 5];
+const WALK_DURATION_PRESETS = [10, 15, 20, 30, 45, 60];
+const GEOFENCE_RADIUS_PRESETS = [80, 120, 200, 300];
+const GRACE_PERIOD_PRESETS = [60, 120, 180, 300];
+const SMART_GAIT_REQUIRED_SECONDS = 30;
+const SMART_GAIT_STEP_TARGET = 40;
+const GUARD_GAIT_STEP_MAGNITUDE_THRESHOLD = 11.4;
+const GUARD_GAIT_MIN_STEP_INTERVAL_MS = 280;
+
+const DEFAULT_GUARD_ROUTINE: GuardRoutine = {
+  enabled: false,
+  name: 'Night Walk Home',
+  trigger: 'schedule',
+  days: WEEKDAY_NUMBERS,
+  startTime: '21:00',
+  durationMinutes: 30,
+  graceSeconds: 120,
+  lastTriggeredKey: null,
+  originLabel: '',
+  originLat: null,
+  originLng: null,
+  geofenceRadiusMeters: 120,
+  geofenceEarliestTime: '20:00',
+  gaitWindowStart: '22:00',
+  gaitWindowEnd: '05:00',
+  gaitRequiredSeconds: SMART_GAIT_REQUIRED_SECONDS,
+};
+
+const loadStoredGuardRoutine = (): GuardRoutine => {
+  try {
+    const stored = localStorage.getItem(GUARD_ROUTINE_STORAGE_KEY);
+    if (!stored) return DEFAULT_GUARD_ROUTINE;
+
+    const parsedRoutine = JSON.parse(stored);
+
+    return {
+      ...DEFAULT_GUARD_ROUTINE,
+      ...parsedRoutine,
+      gaitRequiredSeconds: SMART_GAIT_REQUIRED_SECONDS,
+    };
+  } catch (error) {
+    console.error('Guard-Routine restore failed:', error);
+    return DEFAULT_GUARD_ROUTINE;
+  }
+};
+
+const loadStoredPendingGuardRoutine = (): PendingGuardRoutine | null => {
+  try {
+    const stored = localStorage.getItem(PENDING_GUARD_ROUTINE_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : null;
+  } catch (error) {
+    console.error('Pending Guard-Routine restore failed:', error);
+    return null;
+  }
+};
+
+const ComponentTooltip = ({
+  title,
+  description,
+  children,
+  className = '',
+  side = 'right',
+}: {
+  title: string;
+  description: string;
+  children: React.ReactNode;
+  className?: string;
+  side?: 'right' | 'left' | 'bottom';
+}) => {
+  const desktopSideClass = side === 'left'
+    ? 'sm:right-[calc(100%+0.75rem)] sm:left-auto sm:top-1/2 sm:-translate-y-1/2 sm:translate-x-0'
+    : side === 'bottom'
+      ? 'sm:left-1/2 sm:top-[calc(100%+0.75rem)] sm:-translate-x-1/2 sm:translate-y-0'
+      : 'sm:left-[calc(100%+0.75rem)] sm:top-1/2 sm:-translate-y-1/2 sm:translate-x-0';
+
+  return (
+    <div className={`relative group/tooltip ${className}`}>
+      {children}
+      <div
+        role="tooltip"
+        className={`pointer-events-none absolute left-1/2 top-[calc(100%+0.75rem)] z-[90] w-64 -translate-x-1/2 translate-y-1 rounded-2xl border border-white/10 bg-[#101522]/95 p-3 text-left shadow-[0_18px_48px_rgba(0,0,0,0.45)] opacity-0 backdrop-blur-xl transition-all duration-200 group-hover/tooltip:translate-y-0 group-hover/tooltip:opacity-100 group-focus-within/tooltip:translate-y-0 group-focus-within/tooltip:opacity-100 ${desktopSideClass}`}
+      >
+        <p className="text-[11px] font-headline font-black uppercase tracking-[0.18em] text-white">{title}</p>
+        <p className="mt-1 text-[12px] leading-relaxed text-on-surface-variant">{description}</p>
+      </div>
+    </div>
+  );
 };
 
 export default function App() {
@@ -253,6 +385,7 @@ export default function App() {
     } else if (currentScreen === 'fake-call-pin-confirm' && fakeCallPinTimer === 0 && !fakeCallPinSuccess && !fakeCallWrongPinBufferActive) {
       clearFakeCallAlert();
       if (navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
+      setIsAlertActive(true);
       setAlertTriggerReason('fake_call_no_response');
       setCurrentScreen('alert-sent');
     }
@@ -268,6 +401,7 @@ export default function App() {
     } else if (currentScreen === 'fake-call-pin-confirm' && fakeCallWrongPinBufferActive && fakeCallWrongPinTimer === 0 && !fakeCallPinSuccess) {
       clearFakeCallAlert();
       if (navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
+      setIsAlertActive(true);
       setAlertTriggerReason('fake_call_wrong_pin');
       setCurrentScreen('alert-sent');
     }
@@ -331,6 +465,7 @@ export default function App() {
 
   const [profileData, setProfileData] = useState({
     fullName: '',
+    email: '',
     phone: '',
     homeAddress: '',
     avatar: '👤',
@@ -346,13 +481,40 @@ export default function App() {
     pin: ['', '', '', '']
   });
 
+  const [guardRoutine, setGuardRoutine] = useState<GuardRoutine>(() => loadStoredGuardRoutine());
+  const [pendingGuardRoutine, setPendingGuardRoutine] = useState<PendingGuardRoutine | null>(() => loadStoredPendingGuardRoutine());
+  const [guardGraceTimeLeft, setGuardGraceTimeLeft] = useState(0);
+  const [guardCancelPinAttempt, setGuardCancelPinAttempt] = useState('');
+  const [guardCancelPinError, setGuardCancelPinError] = useState(false);
+  const [guardCancelPinSuccess, setGuardCancelPinSuccess] = useState(false);
+  const [guardMotionPermission, setGuardMotionPermission] = useState<'unknown' | 'granted' | 'denied'>('unknown');
+  const [guardGaitAnalysis, setGuardGaitAnalysis] = useState({
+    active: false,
+    remainingSeconds: SMART_GAIT_REQUIRED_SECONDS,
+    stepEstimate: 0,
+  });
+  const [isSavingGuardOrigin, setIsSavingGuardOrigin] = useState(false);
+  const [activeWalkSource, setActiveWalkSource] = useState<ActiveWalkSource>('manual');
+  const [activeWalkTriggerLabel, setActiveWalkTriggerLabel] = useState('');
+
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showSecurityQuestion, setShowSecurityQuestion] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('Profile saved. You\'re protected.');
   const [loggedInUserName, setLoggedInUserName] = useState('');
+  const [loggedInUserEmail, setLoggedInUserEmail] = useState('');
+  const [loggedInUserPhone, setLoggedInUserPhone] = useState('');
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [profileAuthMode, setProfileAuthMode] = useState<'signup' | 'login'>('signup');
+  const [signupOtp, setSignupOtp] = useState('');
+  const [signupOtpSent, setSignupOtpSent] = useState(false);
+  const [signupOtpVerified, setSignupOtpVerified] = useState(false);
+  const [signupOtpMessage, setSignupOtpMessage] = useState('');
+  const [isSendingSignupOtp, setIsSendingSignupOtp] = useState(false);
+  const [isVerifyingSignupOtp, setIsVerifyingSignupOtp] = useState(false);
+  const [isLoggingInProfile, setIsLoggingInProfile] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
   const [totalTime, setTotalTime] = useState(0);
   const [startTime, setStartTime] = useState<string>('');
@@ -394,6 +556,7 @@ export default function App() {
   const [showActiveToast, setShowActiveToast] = useState(false);
   const [pinAttempt, setPinAttempt] = useState<string[]>([]);
   const [pinConfirmTimer, setPinConfirmTimer] = useState(30);
+  const [pinConfirmMode, setPinConfirmMode] = useState<PinConfirmMode>('safe-arrival');
   const [pinError, setPinError] = useState(false);
   const [pinBufferActive, setPinBufferActive] = useState(false);
   const [pinSuccess, setPinSuccess] = useState(false);
@@ -410,15 +573,47 @@ export default function App() {
   const pinSuccessTimeout = useRef<NodeJS.Timeout | null>(null);
   const cancelPinResetTimeout = useRef<NodeJS.Timeout | null>(null);
   const alertNotificationSentKey = useRef<string | null>(null);
+  const emergencyAlertFallbackWalkId = useRef<string | null>(null);
   const safeArrivalNotificationSentKey = useRef<string | null>(null);
   const safeArrivalNotificationPendingKey = useRef<string | null>(null);
   const pinModalResetTimeout = useRef<NodeJS.Timeout | null>(null);
   const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const currentScreenRef = useRef<Screen>('landing');
+  const isAlertActiveRef = useRef(false);
+  const snatchLockActiveRef = useRef(false);
+  const guardRoutineTriggerLock = useRef<string | null>(null);
+  const guardRoutineGeoWatchId = useRef<number | null>(null);
+  const guardRoutineMotionState = useRef<{
+    movingSince: number | null;
+    listener: ((event: DeviceMotionEvent) => void) | null;
+    lastProgressUpdate: number;
+    stepEstimate: number;
+    lastStepAt: number;
+    previousMagnitude: number | null;
+  }>({
+    movingSince: null,
+    listener: null,
+    lastProgressUpdate: 0,
+    stepEstimate: 0,
+    lastStepAt: 0,
+    previousMagnitude: null,
+  });
+  const guardCancelPinResetTimeout = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const savedLoggedInUserName = localStorage.getItem('saahas_logged_in_profile_name');
     if (savedLoggedInUserName) {
       setLoggedInUserName(savedLoggedInUserName);
+    }
+
+    const savedLoggedInUserEmail = localStorage.getItem('saahas_logged_in_profile_email');
+    if (savedLoggedInUserEmail) {
+      setLoggedInUserEmail(savedLoggedInUserEmail);
+    }
+
+    const savedLoggedInUserPhone = localStorage.getItem('saahas_logged_in_profile_phone');
+    if (savedLoggedInUserPhone) {
+      setLoggedInUserPhone(savedLoggedInUserPhone);
     }
   }, []);
 
@@ -426,8 +621,14 @@ export default function App() {
     return () => {
       if (pinModalResetTimeout.current) clearTimeout(pinModalResetTimeout.current);
       if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+      if (guardCancelPinResetTimeout.current) clearTimeout(guardCancelPinResetTimeout.current);
     };
   }, []);
+
+  useEffect(() => {
+    currentScreenRef.current = currentScreen;
+    isAlertActiveRef.current = isAlertActive;
+  }, [currentScreen, isAlertActive]);
 
   const getSaahasState = (): SaahasRuntime => {
     const globalWindow = window as Window & { SAAHAS?: SaahasRuntime };
@@ -475,6 +676,8 @@ export default function App() {
 
   const isValidIndianPhone = (value: string) => normalizeIndianPhoneInput(value).length === INDIAN_PHONE_LENGTH;
 
+  const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+
   const showTemporaryToast = (message: string) => {
     setToastMessage(message);
     setShowToast(true);
@@ -488,9 +691,144 @@ export default function App() {
     }, 3000);
   };
 
+  const resetGuardGaitAnalysis = () => {
+    setGuardGaitAnalysis((prev) => (
+      prev.active || prev.remainingSeconds !== SMART_GAIT_REQUIRED_SECONDS || prev.stepEstimate !== 0
+        ? {
+            active: false,
+            remainingSeconds: SMART_GAIT_REQUIRED_SECONDS,
+            stepEstimate: 0,
+          }
+        : prev
+    ));
+  };
+
+  const resetGuardRoutineMotionTracking = () => {
+    guardRoutineMotionState.current.movingSince = null;
+    guardRoutineMotionState.current.lastProgressUpdate = 0;
+    guardRoutineMotionState.current.stepEstimate = 0;
+    guardRoutineMotionState.current.lastStepAt = 0;
+    guardRoutineMotionState.current.previousMagnitude = null;
+  };
+
   const getCurrentUserName = () => guestData.name || profileData.fullName || 'User';
 
   const getCurrentUserPhone = () => guestData.phone || profileData.phone || '';
+
+  const getCurrentSafetyPin = () => guestData.pin.join('') || profileData.pin.join('');
+
+  const getGuardTriggerLabel = (trigger: GuardRoutineTrigger) => {
+    if (trigger === 'schedule') {
+      return `Scheduled ${guardRoutine.startTime}`;
+    }
+
+    if (trigger === 'geofence') {
+      return `Left ${guardRoutine.originLabel || 'saved place'}`;
+    }
+
+    return `Walking detected ${guardRoutine.gaitWindowStart}-${guardRoutine.gaitWindowEnd}`;
+  };
+
+  const getLocalDateKey = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const getGuardRoutineTriggerKey = (trigger: GuardRoutineTrigger, date = new Date()) => {
+    const triggerDetail = trigger === 'schedule'
+      ? guardRoutine.startTime
+      : trigger === 'geofence'
+        ? `${guardRoutine.originLat ?? 'no-lat'}:${guardRoutine.originLng ?? 'no-lng'}`
+        : `${guardRoutine.gaitWindowStart}:${guardRoutine.gaitWindowEnd}`;
+
+    return `${getLocalDateKey(date)}:${trigger}:${triggerDetail}`;
+  };
+
+  const parseTimeParts = (time: string) => {
+    const [hours, minutes] = time.split(':').map((part) => Number(part));
+    return {
+      hours: Number.isFinite(hours) ? hours : 0,
+      minutes: Number.isFinite(minutes) ? minutes : 0,
+    };
+  };
+
+  const isSameLocalMinute = (date: Date, time: string) => {
+    const { hours, minutes } = parseTimeParts(time);
+    return date.getHours() === hours && date.getMinutes() === minutes;
+  };
+
+  const isAfterLocalTime = (date: Date, time: string) => {
+    const { hours, minutes } = parseTimeParts(time);
+    return (date.getHours() * 60 + date.getMinutes()) >= (hours * 60 + minutes);
+  };
+
+  const isWithinLocalTimeWindow = (date: Date, start: string, end: string) => {
+    const startParts = parseTimeParts(start);
+    const endParts = parseTimeParts(end);
+    const nowMinutes = date.getHours() * 60 + date.getMinutes();
+    const startMinutes = startParts.hours * 60 + startParts.minutes;
+    const endMinutes = endParts.hours * 60 + endParts.minutes;
+
+    if (startMinutes <= endMinutes) {
+      return nowMinutes >= startMinutes && nowMinutes <= endMinutes;
+    }
+
+    return nowMinutes >= startMinutes || nowMinutes <= endMinutes;
+  };
+
+  const getDistanceMeters = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
+    const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
+    const earthRadiusMeters = 6371000;
+    const dLat = toRadians(b.lat - a.lat);
+    const dLng = toRadians(b.lng - a.lng);
+    const lat1 = toRadians(a.lat);
+    const lat2 = toRadians(b.lat);
+    const sinLat = Math.sin(dLat / 2);
+    const sinLng = Math.sin(dLng / 2);
+    const value = sinLat * sinLat + Math.cos(lat1) * Math.cos(lat2) * sinLng * sinLng;
+    return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+  };
+
+  const canStartGuardRoutine = () => {
+    const emergencyContacts = getEmergencyContacts();
+    return (
+      guardRoutine.enabled &&
+      guardRoutine.durationMinutes > 0 &&
+      isValidIndianPhone(getCurrentUserPhone()) &&
+      getCurrentSafetyPin().length === 4 &&
+      emergencyContacts.length >= 2 &&
+      emergencyContacts.every((contact) => isValidIndianPhone(contact.phone))
+    );
+  };
+
+  const playGuardRoutineCue = () => {
+    if (navigator.vibrate) {
+      navigator.vibrate([120, 80, 120, 80, 240]);
+    }
+
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const context = new AudioContextClass();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(660, context.currentTime);
+      oscillator.frequency.setValueAtTime(880, context.currentTime + 0.16);
+      gain.gain.setValueAtTime(0.0001, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.18, context.currentTime + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.42);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.45);
+      oscillator.onended = () => void context.close();
+    } catch (error) {
+      console.warn('Guard-Routine audio cue failed:', error);
+    }
+  };
 
   const syncProfileLocation = (location: LiveLocationPoint, currentWalkId?: string | null) => {
     const userPhone = getCurrentUserPhone();
@@ -545,6 +883,65 @@ export default function App() {
     if (!point) return 'Unavailable';
     return `https://maps.google.com/?q=${point.lat},${point.lng}`;
   };
+
+  const isCoordinateLocationLabel = (value: string) => {
+    return /^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(value.trim());
+  };
+
+  const getLocationNameFromCoordinates = async (latitude: number, longitude: number) => {
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`);
+    const data = await res.json();
+    const address = data.address || {};
+    const primary = data.name || address.amenity || address.building || address.road || address.neighbourhood || address.suburb;
+    const locality = address.suburb || address.neighbourhood || address.city || address.town || address.village || address.state_district || address.state;
+
+    if (primary && locality && primary !== locality) {
+      return `${primary}, ${locality}`;
+    }
+
+    if (primary || locality) {
+      return primary || locality;
+    }
+
+    return typeof data.display_name === 'string'
+      ? data.display_name.split(',').slice(0, 2).join(',').trim()
+      : '';
+  };
+
+  useEffect(() => {
+    if (
+      guardRoutine.originLat === null ||
+      guardRoutine.originLng === null ||
+      (guardRoutine.originLabel && !isCoordinateLocationLabel(guardRoutine.originLabel))
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    getLocationNameFromCoordinates(guardRoutine.originLat, guardRoutine.originLng)
+      .then((locationName) => {
+        if (!locationName || cancelled) return;
+
+        setGuardRoutine((prev) => {
+          if (prev.originLat !== guardRoutine.originLat || prev.originLng !== guardRoutine.originLng) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            originLabel: locationName,
+          };
+        });
+      })
+      .catch((error) => {
+        console.error('Saved guard origin reverse geocoding failed:', error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [guardRoutine.originLat, guardRoutine.originLng, guardRoutine.originLabel]);
 
   const getLiveLocationPoint = (): LiveLocationPoint | null => {
     if (latestLocationRef.current) {
@@ -602,36 +999,39 @@ export default function App() {
       manual_sos_triggered: 'Manual SOS was triggered',
       pin_modal_timeout: 'Safety confirmation PIN timed out',
       pin_modal_wrong_pin: 'Wrong safety confirmation PIN entered',
+      phone_snatch_detected: 'Possible phone snatching detected',
+      phone_snatch_timeout: 'No PIN response after phone snatch detection',
+      phone_snatch_wrong_pin: 'Wrong PIN after phone snatch detection',
+      phone_snatch_dismissed: 'Phone snatch PIN check was dismissed',
     };
 
     if (!reason) return 'Emergency alert triggered';
     return alertReasonMap[reason] || reason;
   };
 
-  const buildEmergencyAlertMessage = (reasonText: string, detectedBy = 'Saahas Safety App') => {
-    const userName = getCurrentUserName();
+  const buildEmergencyAlertMessage = (_reasonText: string, detectedBy = 'Saahas Safety App') => {
     const currentPoint = latestLocationRef.current || breadcrumbs.current[breadcrumbs.current.length - 1];
     const twoMinutesAgoPoint = [...breadcrumbs.current].reverse().find((point) => Date.now() - point.time >= 120000);
     const fourMinutesAgoPoint = [...breadcrumbs.current].reverse().find((point) => Date.now() - point.time >= 240000);
     const currentLocationLink = buildMapsLink(currentPoint);
     const twoMinutesAgoLink = buildMapsLink(twoMinutesAgoPoint);
     const fourMinutesAgoLink = buildMapsLink(fourMinutesAgoPoint);
+    const alertTime = new Date().toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
 
     return `🚨 SAAHAS ALERT 🚨
-${userName} may be in danger.
-Reason: ${reasonText}
 
 📍 Current location:
-${currentLocationLink === 'Unavailable' ? currentLocation : currentLocationLink}
+${currentLocationLink}
 
 📍 2 min ago: ${twoMinutesAgoLink}
 📍 4 min ago: ${fourMinutesAgoLink}
 
-⏰ Time: ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-📱 Detected by: ${detectedBy}
-
-Reply YES — I am going to help
-Reply NO — I cannot reach them`;
+⏰ Time: ${alertTime}
+📱 Detected by: ${detectedBy}`;
   };
 
   const buildGaitAlertMessage = (gaitReason: string) => {
@@ -695,6 +1095,7 @@ Reply NO — I cannot reach them`;
     const triggerReasons: Record<GaitAlertType, string> = {
       person_fell: 'A fall was detected',
       phone_fallen: 'Phone drop detected',
+      phone_snatched: 'Possible phone snatching detected',
       struggle_detected: 'Unusual movement detected',
       sudden_stop: 'Sudden stop detected',
       extreme_deviation: 'Abnormal movement pattern',
@@ -725,9 +1126,87 @@ Reply NO — I cannot reach them`;
     navigateTo('alert-sent');
   }
 
+  function getRotationMagnitude(reading: GaitReading) {
+    return Math.sqrt(
+      Math.pow(reading.rotationAlpha || 0, 2) +
+      Math.pow(reading.rotationBeta || 0, 2) +
+      Math.pow(reading.rotationGamma || 0, 2)
+    );
+  }
+
+  function triggerPhoneSnatchPinCheck(data: Record<string, unknown>) {
+    if (
+      snatchLockActiveRef.current ||
+      isAlertActiveRef.current ||
+      currentScreenRef.current !== 'active-walk'
+    ) {
+      return;
+    }
+
+    snatchLockActiveRef.current = true;
+    const saahas = getSaahasState();
+    const reason = 'Possible phone snatching detected';
+    saahas.alert.trigger = 'phone_snatch_detected';
+    saahas.alert.gaitType = 'phone_snatched';
+    saahas.alert.gaitReason = reason;
+    saahas.alert.gaitData = data;
+    saahas.alert.messageBody = buildGaitAlertMessage(reason);
+
+    if (pinErrorResetTimeout.current) clearTimeout(pinErrorResetTimeout.current);
+    if (pinSuccessTimeout.current) clearTimeout(pinSuccessTimeout.current);
+
+    setPinConfirmMode('snatch-check');
+    setPinAttempt([]);
+    setPinConfirmTimer(30);
+    setPinBufferActive(true);
+    setPinError(false);
+    setPinSuccess(false);
+    setPinWrongAttemptCount(0);
+    setAlertTriggerReason('phone_snatch_detected');
+    updateGaitBadge('anomaly');
+
+    if (navigator.vibrate) {
+      navigator.vibrate([180, 80, 180, 80, 360]);
+    }
+
+    setCurrentScreen('pin-confirm');
+  }
+
+  function detectPhoneSnatch(reading: GaitReading, gaitData: GaitDataStore) {
+    const baseline = gaitData.baseline;
+    const rotationMagnitude = getRotationMagnitude(reading);
+    const recentReadings = gaitData.readings.slice(-8, -1);
+    const recentAvg = recentReadings.length
+      ? recentReadings.reduce((sum, item) => sum + item.magnitude, 0) / recentReadings.length
+      : reading.magnitude;
+    const accelerationJump = reading.magnitude - recentAvg;
+    const accelerationSpike = baseline
+      ? reading.magnitude > Math.max(28, baseline.avg + (baseline.std * 5))
+      : reading.magnitude > 32;
+    const abruptJerk = accelerationJump > 14 || reading.magnitude > 38;
+    const rotationSpike = rotationMagnitude > 260;
+
+    if (!accelerationSpike || !abruptJerk || !rotationSpike) {
+      return false;
+    }
+
+    triggerPhoneSnatchPinCheck({
+      magnitude: reading.magnitude,
+      accelerationJump: parseFloat(accelerationJump.toFixed(3)),
+      rotationMagnitude: parseFloat(rotationMagnitude.toFixed(3)),
+      rotationAlpha: reading.rotationAlpha,
+      rotationBeta: reading.rotationBeta,
+      rotationGamma: reading.rotationGamma,
+      detectedAt: reading.time,
+    });
+
+    return true;
+  }
+
   function detectAllAnomalies(reading: GaitReading, gaitData: GaitDataStore) {
     const baseline = gaitData.baseline;
     if (!baseline) return;
+    if (snatchLockActiveRef.current) return;
 
     const now = reading.time;
     const mag = reading.magnitude;
@@ -900,6 +1379,10 @@ Reply NO — I cannot reach them`;
         gaitData.readings.shift();
       }
 
+      if (detectPhoneSnatch(reading, gaitData)) {
+        return;
+      }
+
       const walkAge = now - (saahas.walk.gaitStartTime || now);
 
       if (walkAge < 60000) {
@@ -1025,6 +1508,7 @@ Reply NO — I cannot reach them`;
   useEffect(() => {
     if (currentScreen !== 'alert-sent') {
       alertNotificationSentKey.current = null;
+      emergencyAlertFallbackWalkId.current = null;
       return;
     }
 
@@ -1039,7 +1523,9 @@ Reply NO — I cannot reach them`;
       readableReason,
       saahas.alert.trigger === 'gait_ghost' ? 'Gait Monitor' : 'Saahas Safety App'
     );
-    const alertKey = `${walkId || 'no-walk'}:${saahas.alert.trigger || alertTriggerReason || 'emergency_alert'}`;
+    const alertWalkId = walkId || emergencyAlertFallbackWalkId.current || `alert-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    emergencyAlertFallbackWalkId.current = alertWalkId;
+    const alertKey = `${alertWalkId}:${saahas.alert.trigger || alertTriggerReason || 'emergency_alert'}`;
     if (alertNotificationSentKey.current === alertKey) {
       return;
     }
@@ -1051,7 +1537,7 @@ Reply NO — I cannot reach them`;
         userName: getCurrentUserName(),
         userPhone: getCurrentUserPhone(),
         emergencyContacts,
-        walkId,
+        walkId: alertWalkId,
         alertReason: readableReason,
         message,
         latestLocation: latestLocationRef.current,
@@ -1181,11 +1667,12 @@ Reply NO — I cannot reach them`;
   // Timer logic
   useEffect(() => {
     let interval: NodeJS.Timeout;
-    if (currentScreen === 'active-walk' && timeLeft > 0 && !isAlertActive) {
+    const shouldRunWalkTimer = currentScreen === 'active-walk' || (currentScreen === 'pin-confirm' && pinConfirmMode === 'snatch-check');
+    if (shouldRunWalkTimer && timeLeft > 0 && !isAlertActive) {
       interval = setInterval(() => {
         setTimeLeft((prev) => prev - 1);
       }, 1000);
-    } else if (timeLeft === 0 && currentScreen === 'active-walk' && !isAlertActive && !isBufferActive) {
+    } else if (timeLeft === 0 && shouldRunWalkTimer && !isAlertActive && !isBufferActive) {
       if (walkId && overdueNotificationSentWalkId.current !== walkId) {
         overdueNotificationSentWalkId.current = walkId;
         fetch('/api/notify-walk-overdue', {
@@ -1215,7 +1702,7 @@ Reply NO — I cannot reach them`;
       setBufferTime(30);
     }
     return () => clearInterval(interval);
-  }, [currentScreen, timeLeft, isAlertActive, isBufferActive, guestData.name, guestData.phone, guestData.contact1, guestData.contact2, profileData.fullName, profileData.phone, profileData.contact1Name, profileData.contact1Phone, profileData.contact2Name, profileData.contact2Phone, walkId]);
+  }, [currentScreen, pinConfirmMode, timeLeft, isAlertActive, isBufferActive, guestData.name, guestData.phone, guestData.contact1, guestData.contact2, profileData.fullName, profileData.phone, profileData.contact1Name, profileData.contact1Phone, profileData.contact2Name, profileData.contact2Phone, walkId]);
 
   // Buffer Timer logic
   useEffect(() => {
@@ -1241,20 +1728,28 @@ Reply NO — I cannot reach them`;
       }, 1000);
     } else if (currentScreen === 'pin-confirm' && pinBufferActive && pinConfirmTimer === 0 && !pinSuccess) {
       if (navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
+      snatchLockActiveRef.current = false;
       setIsAlertActive(true);
-      setAlertTriggerReason('wrong_pin_timeout');
+      setAlertTriggerReason(
+        pinConfirmMode === 'snatch-check'
+          ? pinWrongAttemptCount > 0
+            ? 'phone_snatch_wrong_pin'
+            : 'phone_snatch_timeout'
+          : 'wrong_pin_timeout'
+      );
       setCurrentScreen('alert-sent');
     }
     return () => clearInterval(interval);
-  }, [currentScreen, pinConfirmTimer, pinBufferActive, pinSuccess]);
+  }, [currentScreen, pinConfirmTimer, pinBufferActive, pinSuccess, pinConfirmMode, pinWrongAttemptCount]);
 
   useEffect(() => {
     if (currentScreen === 'pin-confirm' && pinBufferActive && !pinSuccess) {
       const handleVisibilityChange = () => {
         if (document.visibilityState === 'hidden') {
           if (navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
+          snatchLockActiveRef.current = false;
           setIsAlertActive(true);
-          setAlertTriggerReason('pin_confirm_backgrounded');
+          setAlertTriggerReason(pinConfirmMode === 'snatch-check' ? 'phone_snatch_dismissed' : 'pin_confirm_backgrounded');
           setCurrentScreen('alert-sent');
         }
       };
@@ -1262,7 +1757,7 @@ Reply NO — I cannot reach them`;
       document.addEventListener('visibilitychange', handleVisibilityChange);
       return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
     }
-  }, [currentScreen, pinBufferActive, pinSuccess]);
+  }, [currentScreen, pinBufferActive, pinSuccess, pinConfirmMode]);
 
   // Cancel Walk PIN Timer logic
   useEffect(() => {
@@ -1382,6 +1877,29 @@ Reply NO — I cannot reach them`;
           setPinBufferActive(false);
           setPinError(false);
           setPinSuccess(true);
+
+          if (pinConfirmMode === 'snatch-check') {
+            snatchLockActiveRef.current = false;
+            const saahas = getSaahasState();
+            saahas.alert.fired = false;
+            saahas.alert.trigger = null;
+            saahas.alert.gaitType = null;
+            saahas.alert.gaitReason = null;
+            saahas.alert.gaitData = null;
+            saahas.alert.messageBody = null;
+            setAlertTriggerReason(null);
+            if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+            pinSuccessTimeout.current = setTimeout(() => {
+              setPinAttempt([]);
+              setPinSuccess(false);
+              setPinWrongAttemptCount(0);
+              setPinConfirmMode('safe-arrival');
+              setCurrentScreen('active-walk');
+              updateGaitBadge('active');
+            }, 800);
+            return;
+          }
+
           safeArrivalNotificationPendingKey.current = `${walkId || 'no-walk'}:safe-arrival`;
           if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
           pinSuccessTimeout.current = setTimeout(() => setCurrentScreen('walk-complete'), 800);
@@ -1688,7 +2206,7 @@ Reply NO — I cannot reach them`;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const startWalk = (durationMinutes: number) => {
+  const startWalk = (durationMinutes: number, options: StartWalkOptions = {}) => {
     const emergencyContacts = getEmergencyContacts();
 
     if (emergencyContacts.length < 2 || emergencyContacts.some((contact) => !isValidIndianPhone(contact.phone))) {
@@ -1700,7 +2218,7 @@ Reply NO — I cannot reach them`;
 
     setTimeout(() => {
       const totalSeconds = durationMinutes * 60;
-      const newWalkId = Math.random().toString(36).substring(2, 11);
+      const newWalkId = options.walkIdOverride || Math.random().toString(36).substring(2, 11);
       const saahas = getSaahasState();
       saahas.walk = {
         gaitData: null,
@@ -1730,6 +2248,17 @@ Reply NO — I cannot reach them`;
       setPinTimeout(60);
       setAlertTriggerReason(null);
       setIsAlertActive(false);
+      snatchLockActiveRef.current = false;
+      setPinConfirmMode('safe-arrival');
+      setActiveWalkSource(options.source || 'manual');
+      setActiveWalkTriggerLabel(options.triggerLabel || '');
+      setWalkSummary({
+        duration: '00:00',
+        distance: '0.0 km',
+        gaitEvents: 'None detected',
+        alertsSent: 'None',
+        steps: '0'
+      });
       setShadowAlertStatus({
         status: 'idle',
         shadowModeActive: false,
@@ -1742,27 +2271,491 @@ Reply NO — I cannot reach them`;
       setCurrentScreen('active-walk');
       startGaitGhost();
       setIsStartingWalk(false);
-      fetch('/api/notify-walk-start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userName: guestData.name || profileData.fullName,
-          userPhone: guestData.phone || profileData.phone,
-          emergencyContacts,
-          walkDurationMinutes: durationMinutes,
-          walkId: newWalkId
+      if (options.notifyAlliesOnStart !== false) {
+        fetch('/api/notify-walk-start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userName: guestData.name || profileData.fullName,
+            userPhone: guestData.phone || profileData.phone,
+            emergencyContacts,
+            walkDurationMinutes: durationMinutes,
+            walkId: newWalkId,
+            startSource: options.source || 'manual',
+            triggerLabel: options.triggerLabel || '',
+          })
         })
+          .then(res => res.json())
+          .then(data => console.log('WhatsApp notification sent:', data))
+          .catch(err => console.error('WhatsApp notification failed:', err));
+      }
+    }, options.skipDelay ? 0 : 1200);
+  };
+
+  const triggerGuardRoutine = (trigger: GuardRoutineTrigger, triggerLabel = getGuardTriggerLabel(trigger), forcedKey?: string) => {
+    const triggerKey = forcedKey || getGuardRoutineTriggerKey(trigger);
+
+    if (guardRoutineTriggerLock.current === triggerKey || guardRoutine.lastTriggeredKey === triggerKey || pendingGuardRoutine) {
+      return;
+    }
+
+    if (currentScreen === 'active-walk' || currentScreen === 'pin-confirm' || currentScreen === 'alert-sent' || currentScreen === 'shadow-mode' || currentScreen === 'guard-routine-grace') {
+      return;
+    }
+
+    if (!canStartGuardRoutine()) {
+      showTemporaryToast('Complete phone, PIN, and two emergency contacts before using Guard-Routines.');
+      return;
+    }
+
+    guardRoutineTriggerLock.current = triggerKey;
+    const newWalkId = Math.random().toString(36).substring(2, 11);
+    const now = Date.now();
+    const pendingRoutine: PendingGuardRoutine = {
+      routineName: guardRoutine.name || 'Default Walk',
+      trigger,
+      triggerLabel,
+      startedAt: now,
+      graceEndsAt: now + guardRoutine.graceSeconds * 1000,
+      durationMinutes: guardRoutine.durationMinutes,
+      walkId: newWalkId,
+    };
+
+    setGuardRoutine((prev) => ({
+      ...prev,
+      lastTriggeredKey: triggerKey,
+    }));
+    setPendingGuardRoutine(pendingRoutine);
+    setGuardCancelPinAttempt('');
+    setGuardCancelPinError(false);
+    setGuardCancelPinSuccess(false);
+    setCurrentScreen('guard-routine-grace');
+    playGuardRoutineCue();
+
+    fetch('/api/notify-guard-routine-start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userName: getCurrentUserName(),
+        userPhone: getCurrentUserPhone(),
+        routineName: pendingRoutine.routineName,
+        triggerLabel,
+        walkDurationMinutes: pendingRoutine.durationMinutes,
+        graceSeconds: guardRoutine.graceSeconds,
+        walkId: newWalkId,
+        cancelUrl: `${window.location.origin}${window.location.pathname}?guardCancel=${newWalkId}`,
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data?.success) {
+          throw new Error(data?.error || 'Unknown Guard-Routine notification error');
+        }
+        console.log('Guard-Routine WhatsApp notification sent:', data);
       })
-        .then(res => res.json())
-        .then(data => console.log('WhatsApp notification sent:', data))
-        .catch(err => console.error('WhatsApp notification failed:', err));
-    }, 1200);
+      .catch((error) => {
+        console.error('Guard-Routine WhatsApp notification failed:', error);
+        showTemporaryToast('WhatsApp to you failed. Guard timer is still active.');
+      });
+  };
+
+  const startPendingGuardRoutineWalk = (pendingRoutine = pendingGuardRoutine) => {
+    if (!pendingRoutine) return;
+
+    setPendingGuardRoutine(null);
+    setGuardCancelPinAttempt('');
+    setGuardCancelPinError(false);
+    setGuardCancelPinSuccess(false);
+    startWalk(pendingRoutine.durationMinutes, {
+      source: 'guard-routine',
+      walkIdOverride: pendingRoutine.walkId,
+      triggerLabel: pendingRoutine.triggerLabel,
+      notifyAlliesOnStart: true,
+      skipDelay: true,
+    });
+  };
+
+  const cancelPendingGuardRoutine = () => {
+    if (!pendingGuardRoutine) return;
+    if (guardCancelPinResetTimeout.current) clearTimeout(guardCancelPinResetTimeout.current);
+    setGuardCancelPinSuccess(true);
+    setGuardCancelPinError(false);
+    if (navigator.vibrate) navigator.vibrate([80, 50, 80]);
+
+    setTimeout(() => {
+      setPendingGuardRoutine(null);
+      setGuardCancelPinAttempt('');
+      setGuardCancelPinSuccess(false);
+      setCurrentScreen('landing');
+      showTemporaryToast('Guard-Routine cancelled safely.');
+    }, 700);
+  };
+
+  const handleGuardCancelPinInput = (digit: string) => {
+    if (!pendingGuardRoutine || guardCancelPinError || guardCancelPinSuccess || guardCancelPinAttempt.length >= 4) {
+      return;
+    }
+
+    const nextAttempt = guardCancelPinAttempt + digit;
+    setGuardCancelPinAttempt(nextAttempt);
+
+    if (nextAttempt.length !== 4) {
+      return;
+    }
+
+    if (nextAttempt === getCurrentSafetyPin()) {
+      cancelPendingGuardRoutine();
+      return;
+    }
+
+    if (guardCancelPinResetTimeout.current) clearTimeout(guardCancelPinResetTimeout.current);
+    setGuardCancelPinError(true);
+    if (navigator.vibrate) navigator.vibrate([350]);
+    guardCancelPinResetTimeout.current = setTimeout(() => {
+      setGuardCancelPinAttempt('');
+      setGuardCancelPinError(false);
+    }, 1100);
+  };
+
+  const handleGuardCancelPinBackspace = () => {
+    if (!guardCancelPinError && !guardCancelPinSuccess) {
+      setGuardCancelPinAttempt((prev) => prev.slice(0, -1));
+    }
+  };
+
+  const saveGuardRoutineOriginFromGps = () => {
+    if (!('geolocation' in navigator)) {
+      showTemporaryToast('GPS is unavailable on this device.');
+      return;
+    }
+
+    setIsSavingGuardOrigin(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        let originLabel = currentLocation !== 'Locating...' ? currentLocation : 'Current location';
+
+        try {
+          const locationName = await getLocationNameFromCoordinates(latitude, longitude);
+          if (locationName) {
+            originLabel = locationName;
+          }
+        } catch (error) {
+          console.error('Guard origin reverse geocoding failed:', error);
+        }
+
+        setGuardRoutine((prev) => ({
+          ...prev,
+          originLat: latitude,
+          originLng: longitude,
+          originLabel,
+        }));
+        setIsSavingGuardOrigin(false);
+        showTemporaryToast('Guard origin saved from current location.');
+      },
+      () => {
+        setIsSavingGuardOrigin(false);
+        showTemporaryToast('Location permission is needed for geofence routines.');
+      },
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
+  };
+
+  const requestGuardMotionPermission = () => {
+    if (typeof DeviceMotionEvent === 'undefined') {
+      setGuardMotionPermission('denied');
+      showTemporaryToast('Motion sensors are unavailable on this device.');
+      return;
+    }
+
+    const motionEvent = DeviceMotionEvent as typeof DeviceMotionEvent & {
+      requestPermission?: () => Promise<'granted' | 'denied'>;
+    };
+
+    if (typeof motionEvent.requestPermission !== 'function') {
+      setGuardMotionPermission('granted');
+      showTemporaryToast('Motion trigger is ready.');
+      return;
+    }
+
+    motionEvent.requestPermission()
+      .then((permission) => {
+        setGuardMotionPermission(permission);
+        showTemporaryToast(permission === 'granted' ? 'Motion trigger is ready.' : 'Motion permission was denied.');
+      })
+      .catch(() => {
+        setGuardMotionPermission('denied');
+        showTemporaryToast('Motion permission could not be enabled.');
+      });
   };
 
   // Save to localStorage whenever guestData changes
   useEffect(() => {
     localStorage.setItem('saahas_guest', JSON.stringify(guestData));
   }, [guestData]);
+
+  useEffect(() => {
+    localStorage.setItem(GUARD_ROUTINE_STORAGE_KEY, JSON.stringify(guardRoutine));
+  }, [guardRoutine]);
+
+  useEffect(() => {
+    setSignupOtpVerified(false);
+    setSignupOtpSent(false);
+    setSignupOtp('');
+    setSignupOtpMessage('');
+  }, [profileData.email, profileData.phone]);
+
+  useEffect(() => {
+    if (pendingGuardRoutine) {
+      localStorage.setItem(PENDING_GUARD_ROUTINE_STORAGE_KEY, JSON.stringify(pendingGuardRoutine));
+    } else {
+      localStorage.removeItem(PENDING_GUARD_ROUTINE_STORAGE_KEY);
+    }
+  }, [pendingGuardRoutine]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const guardCancelWalkId = params.get('guardCancel');
+    if (!guardCancelWalkId) return;
+
+    if (pendingGuardRoutine?.walkId === guardCancelWalkId) {
+      setCurrentScreen('guard-routine-grace');
+    } else {
+      showTemporaryToast('No pending Guard-Routine found on this device.');
+    }
+
+    params.delete('guardCancel');
+    const nextSearch = params.toString();
+    const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+    window.history.replaceState(null, '', nextUrl);
+  }, [pendingGuardRoutine]);
+
+  useEffect(() => {
+    if (!pendingGuardRoutine) {
+      setGuardGraceTimeLeft(0);
+      return;
+    }
+
+    const tick = () => {
+      const secondsLeft = Math.max(0, Math.ceil((pendingGuardRoutine.graceEndsAt - Date.now()) / 1000));
+      setGuardGraceTimeLeft(secondsLeft);
+
+      if (secondsLeft === 0) {
+        startPendingGuardRoutineWalk(pendingGuardRoutine);
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [pendingGuardRoutine]);
+
+  useEffect(() => {
+    if (!guardRoutine.enabled || guardRoutine.trigger !== 'schedule') {
+      return;
+    }
+
+    const checkScheduleTrigger = () => {
+      const now = new Date();
+      const triggerKey = getGuardRoutineTriggerKey('schedule', now);
+
+      if (
+        guardRoutine.days.includes(now.getDay()) &&
+        isSameLocalMinute(now, guardRoutine.startTime) &&
+        guardRoutine.lastTriggeredKey !== triggerKey &&
+        guardRoutineTriggerLock.current !== triggerKey
+      ) {
+        triggerGuardRoutine('schedule', `Scheduled ${guardRoutine.startTime}`, triggerKey);
+      }
+    };
+
+    checkScheduleTrigger();
+    const interval = setInterval(checkScheduleTrigger, 10000);
+    return () => clearInterval(interval);
+  }, [
+    guardRoutine.enabled,
+    guardRoutine.trigger,
+    guardRoutine.days,
+    guardRoutine.startTime,
+    guardRoutine.lastTriggeredKey,
+    currentScreen,
+    pendingGuardRoutine,
+    guestData,
+    profileData,
+  ]);
+
+  useEffect(() => {
+    if (guardRoutineGeoWatchId.current !== null) {
+      navigator.geolocation.clearWatch(guardRoutineGeoWatchId.current);
+      guardRoutineGeoWatchId.current = null;
+    }
+
+    if (
+      !guardRoutine.enabled ||
+      guardRoutine.trigger !== 'geofence' ||
+      guardRoutine.originLat === null ||
+      guardRoutine.originLng === null ||
+      !('geolocation' in navigator)
+    ) {
+      return;
+    }
+
+    guardRoutineGeoWatchId.current = navigator.geolocation.watchPosition(
+      (position) => {
+        const now = new Date();
+        const triggerKey = getGuardRoutineTriggerKey('geofence', now);
+        const origin = {
+          lat: guardRoutine.originLat as number,
+          lng: guardRoutine.originLng as number,
+        };
+        const distance = getDistanceMeters(origin, {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        });
+
+        if (
+          isAfterLocalTime(now, guardRoutine.geofenceEarliestTime) &&
+          distance >= guardRoutine.geofenceRadiusMeters &&
+          guardRoutine.lastTriggeredKey !== triggerKey &&
+          guardRoutineTriggerLock.current !== triggerKey
+        ) {
+          triggerGuardRoutine('geofence', `Left ${guardRoutine.originLabel || 'saved place'}`, triggerKey);
+        }
+      },
+      (error) => {
+        console.warn('Guard-Routine geofence watch failed:', error);
+      },
+      { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 },
+    );
+
+    return () => {
+      if (guardRoutineGeoWatchId.current !== null) {
+        navigator.geolocation.clearWatch(guardRoutineGeoWatchId.current);
+        guardRoutineGeoWatchId.current = null;
+      }
+    };
+  }, [
+    guardRoutine.enabled,
+    guardRoutine.trigger,
+    guardRoutine.originLat,
+    guardRoutine.originLng,
+    guardRoutine.originLabel,
+    guardRoutine.geofenceRadiusMeters,
+    guardRoutine.geofenceEarliestTime,
+    guardRoutine.lastTriggeredKey,
+    currentScreen,
+    pendingGuardRoutine,
+    guestData,
+    profileData,
+  ]);
+
+  useEffect(() => {
+    if (guardRoutineMotionState.current.listener) {
+      window.removeEventListener('devicemotion', guardRoutineMotionState.current.listener);
+      guardRoutineMotionState.current.listener = null;
+      resetGuardRoutineMotionTracking();
+    }
+
+    if (
+      !guardRoutine.enabled ||
+      guardRoutine.trigger !== 'gait' ||
+      guardMotionPermission === 'denied' ||
+      typeof DeviceMotionEvent === 'undefined'
+    ) {
+      resetGuardGaitAnalysis();
+      return;
+    }
+
+    const listener = (event: DeviceMotionEvent) => {
+      const now = new Date();
+      const triggerKey = getGuardRoutineTriggerKey('gait', now);
+
+      if (
+        !isWithinLocalTimeWindow(now, guardRoutine.gaitWindowStart, guardRoutine.gaitWindowEnd) ||
+        guardRoutine.lastTriggeredKey === triggerKey ||
+        guardRoutineTriggerLock.current === triggerKey
+      ) {
+        resetGuardRoutineMotionTracking();
+        resetGuardGaitAnalysis();
+        return;
+      }
+
+      const acc = event.accelerationIncludingGravity;
+      if (!acc || acc.x === null || acc.y === null || acc.z === null) {
+        return;
+      }
+
+      const magnitude = Math.sqrt((acc.x || 0) ** 2 + (acc.y || 0) ** 2 + (acc.z || 0) ** 2);
+      const walkingLikeMovement = Math.abs(magnitude - 9.81) > 1.15 || magnitude > 12.25;
+      const currentTime = Date.now();
+
+      if (!walkingLikeMovement) {
+        resetGuardRoutineMotionTracking();
+        resetGuardGaitAnalysis();
+        return;
+      }
+
+      if (!guardRoutineMotionState.current.movingSince) {
+        guardRoutineMotionState.current.movingSince = currentTime;
+        setGuardGaitAnalysis({
+          active: true,
+          remainingSeconds: SMART_GAIT_REQUIRED_SECONDS,
+          stepEstimate: 0,
+        });
+        return;
+      }
+
+      const movingSeconds = (currentTime - guardRoutineMotionState.current.movingSince) / 1000;
+      const previousMagnitude = guardRoutineMotionState.current.previousMagnitude ?? magnitude;
+      const detectedStep =
+        previousMagnitude <= GUARD_GAIT_STEP_MAGNITUDE_THRESHOLD &&
+        magnitude > GUARD_GAIT_STEP_MAGNITUDE_THRESHOLD &&
+        currentTime - guardRoutineMotionState.current.lastStepAt > GUARD_GAIT_MIN_STEP_INTERVAL_MS;
+
+      guardRoutineMotionState.current.previousMagnitude = magnitude;
+
+      if (detectedStep) {
+        guardRoutineMotionState.current.stepEstimate += 1;
+        guardRoutineMotionState.current.lastStepAt = currentTime;
+      }
+
+      if (currentTime - guardRoutineMotionState.current.lastProgressUpdate > 500) {
+        guardRoutineMotionState.current.lastProgressUpdate = currentTime;
+        setGuardGaitAnalysis({
+          active: true,
+          remainingSeconds: Math.max(0, Math.ceil(SMART_GAIT_REQUIRED_SECONDS - movingSeconds)),
+          stepEstimate: Math.min(SMART_GAIT_STEP_TARGET, guardRoutineMotionState.current.stepEstimate),
+        });
+      }
+
+      if (movingSeconds >= SMART_GAIT_REQUIRED_SECONDS || guardRoutineMotionState.current.stepEstimate >= SMART_GAIT_STEP_TARGET) {
+        triggerGuardRoutine('gait', `Walking auto-detected after ${Math.round(movingSeconds)}s`, triggerKey);
+        resetGuardRoutineMotionTracking();
+        resetGuardGaitAnalysis();
+      }
+    };
+
+    guardRoutineMotionState.current.listener = listener;
+    window.addEventListener('devicemotion', listener);
+
+    return () => {
+      window.removeEventListener('devicemotion', listener);
+      guardRoutineMotionState.current.listener = null;
+      resetGuardRoutineMotionTracking();
+      resetGuardGaitAnalysis();
+    };
+  }, [
+    guardRoutine.enabled,
+    guardRoutine.trigger,
+    guardRoutine.gaitWindowStart,
+    guardRoutine.gaitWindowEnd,
+    guardRoutine.lastTriggeredKey,
+    guardMotionPermission,
+    currentScreen,
+    pendingGuardRoutine,
+    guestData,
+    profileData,
+  ]);
 
   const handleGuestPinChange = (index: number, value: string) => {
     if (value.length > 1) return;
@@ -1804,6 +2797,7 @@ Reply NO — I cannot reach them`;
     });
     setProfileData({
       fullName: '',
+      email: '',
       phone: '',
       homeAddress: '',
       avatar: '👤',
@@ -1819,6 +2813,16 @@ Reply NO — I cannot reach them`;
       pin: ['', '', '', '']
     });
     localStorage.removeItem('saahas_guest');
+    localStorage.removeItem('saahas_logged_in_profile_name');
+    localStorage.removeItem('saahas_logged_in_profile_email');
+    localStorage.removeItem('saahas_logged_in_profile_phone');
+    setLoggedInUserName('');
+    setLoggedInUserEmail('');
+    setLoggedInUserPhone('');
+    setGuardRoutine(DEFAULT_GUARD_ROUTINE);
+    setPendingGuardRoutine(null);
+    localStorage.removeItem(GUARD_ROUTINE_STORAGE_KEY);
+    localStorage.removeItem(PENDING_GUARD_ROUTINE_STORAGE_KEY);
     setShowDeleteModal(false);
     setCurrentScreen('landing');
   };
@@ -1872,32 +2876,146 @@ Reply NO — I cannot reach them`;
       });
   };
 
-  const handleProfileLoginState = (fullName: string) => {
+  const handleProfileLoginState = (fullName: string, email = profileData.email, phone = profileData.phone) => {
     const normalizedFullName = fullName.trim();
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedPhone = normalizeIndianPhoneInput(phone);
     setLoggedInUserName(normalizedFullName);
+    setLoggedInUserEmail(normalizedEmail);
+    setLoggedInUserPhone(normalizedPhone);
     localStorage.setItem('saahas_logged_in_profile_name', normalizedFullName);
+    localStorage.setItem('saahas_logged_in_profile_email', normalizedEmail);
+    localStorage.setItem('saahas_logged_in_profile_phone', normalizedPhone);
     setShowProfileMenu(false);
   };
 
   const handleLogout = () => {
     setLoggedInUserName('');
+    setLoggedInUserEmail('');
+    setLoggedInUserPhone('');
     setShowProfileMenu(false);
     localStorage.removeItem('saahas_logged_in_profile_name');
+    localStorage.removeItem('saahas_logged_in_profile_email');
+    localStorage.removeItem('saahas_logged_in_profile_phone');
     setCurrentScreen('landing');
   };
 
+  const handleSendSignupOtp = () => {
+    if (!isValidEmail(profileData.email)) {
+      showTemporaryToast('Enter a valid email for OTP verification.');
+      return;
+    }
+
+    if (!isValidIndianPhone(profileData.phone)) {
+      showTemporaryToast('Enter your 10-digit phone number before OTP.');
+      return;
+    }
+
+    setIsSendingSignupOtp(true);
+    setSignupOtpMessage('');
+
+    fetch('/api/profile/signup/send-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fullName: profileData.fullName,
+        email: profileData.email,
+        phone: normalizeIndianPhoneInput(profileData.phone),
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data.success) {
+          throw new Error(data.error || 'Could not send OTP.');
+        }
+
+        setSignupOtpSent(true);
+        setSignupOtpVerified(false);
+        setSignupOtp('');
+        setSignupOtpMessage('OTP sent to your email.');
+        showTemporaryToast('Signup OTP sent to your email.');
+      })
+      .catch((error) => {
+        console.error('Signup OTP send failed:', error);
+        setSignupOtpMessage(error instanceof Error ? error.message : 'Could not send OTP.');
+      })
+      .finally(() => setIsSendingSignupOtp(false));
+  };
+
+  const handleVerifySignupOtp = () => {
+    if (signupOtp.replace(/\D/g, '').length !== 6) {
+      setSignupOtpMessage('Enter the 6-digit OTP.');
+      return;
+    }
+
+    setIsVerifyingSignupOtp(true);
+    setSignupOtpMessage('');
+
+    fetch('/api/profile/signup/verify-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: profileData.email,
+        phone: normalizeIndianPhoneInput(profileData.phone),
+        otp: signupOtp,
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data.success) {
+          throw new Error(data.error || 'OTP verification failed.');
+        }
+
+        setSignupOtpVerified(true);
+        setSignupOtpMessage('Email verified. You can save your profile now.');
+        showTemporaryToast('Email verified.');
+      })
+      .catch((error) => {
+        console.error('Signup OTP verify failed:', error);
+        setSignupOtpVerified(false);
+        setSignupOtpMessage(error instanceof Error ? error.message : 'OTP verification failed.');
+      })
+      .finally(() => setIsVerifyingSignupOtp(false));
+  };
+
   const handleSaveProfile = () => {
+    if (!profileData.fullName.trim()) {
+      showTemporaryToast('Enter your full name.');
+      return;
+    }
+
+    if (!isValidEmail(profileData.email)) {
+      showTemporaryToast('Enter a valid email.');
+      return;
+    }
+
+    if (!isValidIndianPhone(profileData.phone)) {
+      showTemporaryToast('Enter your 10-digit phone number.');
+      return;
+    }
+
     if (!isValidIndianPhone(profileData.contact1Phone) || !isValidIndianPhone(profileData.contact2Phone)) {
       showTemporaryToast('Emergency contacts must include 10 digits. +91 is added automatically.');
       return;
     }
 
-    handleProfileLoginState(profileData.fullName);
+    if (profileData.pin.join('').length !== 4) {
+      showTemporaryToast('Create a 4-digit safety PIN.');
+      return;
+    }
+
+    if (!signupOtpVerified) {
+      showTemporaryToast('Verify your email OTP before saving.');
+      return;
+    }
+
+    setIsSavingProfile(true);
     fetch('/api/profile/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         fullName: profileData.fullName,
+        email: profileData.email,
         phone: profileData.phone,
         homeAddress: profileData.homeAddress,
         contact1Name: profileData.contact1Name,
@@ -1914,17 +3032,32 @@ Reply NO — I cannot reach them`;
     })
       .then(res => res.json())
       .then(data => {
+        if (!data.success) {
+          throw new Error(data.error || 'Profile save failed.');
+        }
         console.log('Profile saved to MongoDB:', data);
+        handleProfileLoginState(profileData.fullName, profileData.email, profileData.phone);
+        setSignupOtpVerified(false);
+        setSignupOtpSent(false);
+        setSignupOtp('');
+        setSignupOtpMessage('');
         showTemporaryToast('Profile saved. You are protected.');
         setCurrentScreen('landing');
       })
       .catch(err => {
         console.error('Profile save failed:', err);
-        showTemporaryToast('Profile save failed. Please try again.');
-      });
+        showTemporaryToast(err instanceof Error ? err.message : 'Profile save failed. Please try again.');
+      })
+      .finally(() => setIsSavingProfile(false));
   };
 
   const handleLoginProfile = () => {
+    if (!isValidIndianPhone(profileData.phone) || profileData.pin.join('').length !== 4) {
+      showTemporaryToast('Enter phone number and 4-digit PIN to login.');
+      return;
+    }
+
+    setIsLoggingInProfile(true);
     fetch('/api/profile/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1941,34 +3074,85 @@ Reply NO — I cannot reach them`;
             contact1Phone: normalizeIndianPhoneInput(data.profile.contact1Phone || ''),
             contact2Phone: normalizeIndianPhoneInput(data.profile.contact2Phone || ''),
           });
-          handleProfileLoginState(data.profile.fullName || profileData.fullName);
+          handleProfileLoginState(data.profile.fullName || profileData.fullName, data.profile.email || '', data.profile.phone || profileData.phone);
           setCurrentScreen('landing');
           console.log('Profile login successful:', data);
           return;
         }
 
         console.error('Profile login failed:', data);
+        showTemporaryToast(data.error || 'Login failed. Check phone and PIN.');
       })
-      .catch(err => console.error('Profile login failed:', err));
+      .catch(err => {
+        console.error('Profile login failed:', err);
+        showTemporaryToast('Login failed. Please try again.');
+      })
+      .finally(() => setIsLoggingInProfile(false));
   };
 
   const handlePinConfirmClose = () => {
     if (pinErrorResetTimeout.current) clearTimeout(pinErrorResetTimeout.current);
     if (pinSuccessTimeout.current) clearTimeout(pinSuccessTimeout.current);
     if (pinBufferActive && navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
+    snatchLockActiveRef.current = false;
     setIsAlertActive(true);
-    setAlertTriggerReason('pin_confirm_closed');
+    setAlertTriggerReason(pinConfirmMode === 'snatch-check' ? 'phone_snatch_dismissed' : 'pin_confirm_closed');
     setCurrentScreen('alert-sent');
   };
 
   const profileContact1Digits = normalizeIndianPhoneInput(profileData.contact1Phone);
   const profileContact2Digits = normalizeIndianPhoneInput(profileData.contact2Phone);
+  const profilePhoneDigits = normalizeIndianPhoneInput(profileData.phone);
   const guestContact1Digits = normalizeIndianPhoneInput(guestData.contact1);
   const guestContact2Digits = normalizeIndianPhoneInput(guestData.contact2);
   const profileEmergencyContactsValid = isValidIndianPhone(profileData.contact1Phone) && isValidIndianPhone(profileData.contact2Phone);
+  const profileSignupReady = profileEmergencyContactsValid && isValidIndianPhone(profileData.phone) && isValidEmail(profileData.email) && profileData.pin.join('').length === 4 && signupOtpVerified && Boolean(profileData.fullName.trim());
+  const profileLoginReady = isValidIndianPhone(profileData.phone) && profileData.pin.join('').length === 4;
   const guestEmergencyContactsValid = isValidIndianPhone(guestData.contact1) && isValidIndianPhone(guestData.contact2);
   const shadowMapPoint = getLiveLocationPoint();
   const shadowMapEmbedUrl = buildShadowMapEmbedUrl(shadowMapPoint);
+  const guardRoutineReady = canStartGuardRoutine();
+  const guardRoutineDaysLabel = guardRoutine.days.length === 7
+    ? 'Every day'
+    : guardRoutine.days.length === 0
+      ? 'No days'
+      : guardRoutine.days.map((day) => DAY_LABELS[day]).join(', ');
+  const guardRoutineStatusLabel = guardRoutine.enabled
+    ? `${guardRoutine.trigger === 'schedule' ? guardRoutine.startTime : guardRoutine.trigger === 'geofence' ? 'Geofence' : 'Gait'} · ${guardRoutine.durationMinutes}m`
+    : 'Set default auto-start';
+  const guardRoutineGraceMinutes = Math.ceil(guardRoutine.graceSeconds / 60);
+  const guardOriginDisplayLabel = guardRoutine.originLabel && !isCoordinateLocationLabel(guardRoutine.originLabel)
+    ? guardRoutine.originLabel
+    : guardRoutine.originLat !== null && guardRoutine.originLng !== null
+      ? 'Current location'
+      : 'No origin saved';
+  const guardDurationSelectValue = WALK_DURATION_PRESETS.includes(guardRoutine.durationMinutes)
+    ? String(guardRoutine.durationMinutes)
+    : 'custom';
+  const guardRadiusSelectValue = GEOFENCE_RADIUS_PRESETS.includes(guardRoutine.geofenceRadiusMeters)
+    ? String(guardRoutine.geofenceRadiusMeters)
+    : 'custom';
+  const guardGraceSelectValue = GRACE_PERIOD_PRESETS.includes(guardRoutine.graceSeconds)
+    ? String(guardRoutine.graceSeconds)
+    : 'custom';
+  const guardGaitProgressPercent = guardGaitAnalysis.active
+    ? Math.min(100, Math.round(Math.max(
+        ((SMART_GAIT_REQUIRED_SECONDS - guardGaitAnalysis.remainingSeconds) / SMART_GAIT_REQUIRED_SECONDS) * 100,
+        (guardGaitAnalysis.stepEstimate / SMART_GAIT_STEP_TARGET) * 100,
+      )))
+    : 0;
+  const isSnatchPinCheck = pinConfirmMode === 'snatch-check';
+  const pinConfirmTitle = isSnatchPinCheck ? 'Phone Snatch Check' : 'Confirm Safe Arrival';
+  const pinConfirmHeading = isSnatchPinCheck
+    ? 'Enter PIN to unlock Saahas'
+    : pinBufferActive
+      ? 'Enter correct PIN to stop alert'
+      : 'Enter your secret PIN';
+  const pinConfirmDescription = isSnatchPinCheck
+    ? 'Possible phone snatching detected. Walk timer keeps running in the background.'
+    : pinBufferActive
+      ? 'Countdown will continue until the correct PIN is entered'
+      : 'Enter your PIN to confirm safe arrival';
 
   return (
     <div className="min-h-screen bg-background text-on-surface font-sans overflow-x-hidden relative selection:bg-primary/30">
@@ -1986,7 +3170,7 @@ Reply NO — I cannot reach them`;
               <div className="absolute top-8 right-8 z-20 flex flex-col items-end">
                 <button
                   onClick={() => setShowProfileMenu(prev => !prev)}
-                  className="w-12 h-12 rounded-full bg-white/10 border border-white/15 text-white font-headline font-black text-lg flex items-center justify-center shadow-[0_15px_40px_rgba(0,0,0,0.35)] backdrop-blur-md"
+                  className="w-12 h-12 rounded-full bg-linear-to-br from-primary to-primary-variant border border-white/20 text-white font-headline font-black text-lg flex items-center justify-center shadow-[0_15px_40px_rgba(79,70,229,0.38)] backdrop-blur-md"
                 >
                   {loggedInUserName.trim().charAt(0).toUpperCase()}
                 </button>
@@ -1996,11 +3180,32 @@ Reply NO — I cannot reach them`;
                       initial={{ opacity: 0, y: -8, scale: 0.96 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: -8, scale: 0.96 }}
-                      className="mt-3 rounded-2xl bg-[#121725]/95 border border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-xl overflow-hidden"
+                      className="mt-3 w-72 rounded-3xl bg-[#121725]/95 border border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-xl overflow-hidden"
                     >
+                      <div className="p-4 border-b border-white/10">
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-2xl bg-linear-to-br from-primary to-primary-variant flex items-center justify-center text-white font-headline font-black text-lg shadow-lg shadow-primary/20">
+                            {loggedInUserName.trim().charAt(0).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-headline font-bold text-white truncate">{loggedInUserName}</p>
+                            <p className="text-[11px] text-on-surface-variant truncate">{loggedInUserEmail || 'Email not linked'}</p>
+                          </div>
+                        </div>
+                        <div className="mt-4 grid grid-cols-2 gap-2">
+                          <div className="rounded-2xl bg-white/5 border border-white/10 px-3 py-2">
+                            <p className="text-[9px] uppercase tracking-widest text-on-surface-variant font-bold">Phone</p>
+                            <p className="text-[12px] text-white font-semibold mt-1 truncate">{loggedInUserPhone ? `+91 ${loggedInUserPhone}` : 'Not saved'}</p>
+                          </div>
+                          <div className="rounded-2xl bg-emerald-500/10 border border-emerald-500/20 px-3 py-2">
+                            <p className="text-[9px] uppercase tracking-widest text-emerald-400 font-bold">Status</p>
+                            <p className="text-[12px] text-white font-semibold mt-1">Protected</p>
+                          </div>
+                        </div>
+                      </div>
                       <button
                         onClick={handleLogout}
-                        className="px-5 py-3 text-[11px] tracking-[0.25em] font-bold text-white/80 hover:text-white hover:bg-white/5 transition-colors"
+                        className="w-full px-5 py-3 text-[11px] tracking-[0.25em] font-bold text-white/80 hover:text-white hover:bg-white/5 transition-colors text-left"
                       >
                         LOG OUT
                       </button>
@@ -2064,7 +3269,7 @@ Reply NO — I cannot reach them`;
             </div>
 
             {/* Middle Section: Primary Action & Features */}
-            <div className="w-full max-w-sm flex flex-col items-center gap-16 z-10">
+            <div className="w-full max-w-sm flex flex-col items-center gap-14 -mt-8 z-10">
               <motion.button
                 whileHover={{ scale: 1.03, translateY: -3 }}
                 whileTap={{ scale: 0.97 }}
@@ -2072,7 +3277,7 @@ Reply NO — I cannot reach them`;
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.8, duration: 0.8, ease: [0.23, 1, 0.32, 1] }}
                 onClick={() => setCurrentScreen('guest-setup')}
-                className="w-full py-6 bg-linear-to-r from-primary to-primary-variant rounded-[1.25rem] flex items-center justify-center gap-4 text-white font-black text-xl shadow-[0_20px_50px_-10px_rgba(79,70,229,0.6)] relative overflow-hidden group animate-pulse-primary"
+                className="w-full mb-2 py-6 bg-linear-to-r from-primary to-primary-variant rounded-[1.25rem] flex items-center justify-center gap-4 text-white font-black text-xl shadow-[0_20px_50px_-10px_rgba(79,70,229,0.6)] relative overflow-hidden group animate-pulse-primary"
               >
                 <div className="absolute inset-0 bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
                 <motion.div 
@@ -2081,6 +3286,32 @@ Reply NO — I cannot reach them`;
                 />
                 <span className="relative tracking-tight drop-shadow-md">START WALK NOW</span>
                 <ArrowRight className="w-6 h-6 relative group-hover:translate-x-1 transition-transform drop-shadow-md" strokeWidth={3} />
+              </motion.button>
+
+              <motion.button
+                whileHover={{ scale: 1.02, translateY: -2 }}
+                whileTap={{ scale: 0.98 }}
+                initial={{ opacity: 0, y: 24 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 1, duration: 0.7, ease: [0.23, 1, 0.32, 1] }}
+                onClick={() => setCurrentScreen('guard-routine-setup')}
+                className="w-full rounded-2xl bg-white/5 border border-white/10 p-4 flex items-center gap-4 text-left shadow-[0_18px_45px_rgba(0,0,0,0.28)] backdrop-blur-xl"
+              >
+                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${guardRoutine.enabled ? 'bg-emerald-500/12 text-emerald-400 border border-emerald-500/20' : 'bg-primary/10 text-primary border border-primary/20'}`}>
+                  <Clock className="w-5 h-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-headline font-black text-white">Guard-Routine</span>
+                    {guardRoutine.enabled && (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[9px] font-bold uppercase tracking-wider">
+                        On
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-on-surface-variant font-semibold truncate">{guardRoutineStatusLabel}</p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-white/45 shrink-0" />
               </motion.button>
 
               <motion.div 
@@ -2169,6 +3400,164 @@ Reply NO — I cannot reach them`;
 
               {/* Form Fields */}
               <form className="space-y-8" onSubmit={(e) => e.preventDefault()}>
+                <section className="rounded-3xl bg-surface-high/60 border border-white/10 p-5 sm:p-6 shadow-[0_22px_60px_rgba(0,0,0,0.32)] relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-primary/10 blur-[70px] rounded-full pointer-events-none" />
+                  <div className="relative z-10">
+                    <div className="flex items-center gap-4 mb-5">
+                      <div className="w-12 h-12 rounded-2xl bg-primary/10 border border-primary/25 flex items-center justify-center text-primary">
+                        {profileAuthMode === 'signup' ? <Mail className="w-6 h-6" /> : <KeyRound className="w-6 h-6" />}
+                      </div>
+                      <div>
+                        <h2 className="font-headline text-xl font-black text-white">Account Access</h2>
+                        <p className="text-xs text-on-surface-variant">Signup uses email OTP. Login uses phone and PIN.</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 bg-surface-low/80 p-1.5 rounded-2xl border border-outline-variant/20 mb-5">
+                      {(['signup', 'login'] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => {
+                            setProfileAuthMode(mode);
+                            setSignupOtpMessage('');
+                          }}
+                          className={`py-3 rounded-xl text-xs font-headline font-black uppercase tracking-wider transition-colors ${profileAuthMode === mode ? 'bg-primary text-white shadow-[0_0_18px_rgba(79,70,229,0.45)]' : 'text-on-surface-variant hover:text-white'}`}
+                        >
+                          {mode === 'signup' ? 'Sign Up' : 'Login'}
+                        </button>
+                      ))}
+                    </div>
+
+                    {profileAuthMode === 'signup' ? (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <label className="space-y-2">
+                            <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Email for OTP</span>
+                            <div className={`flex items-center gap-3 bg-surface-low/80 border rounded-xl px-4 py-3 ${profileData.email && !isValidEmail(profileData.email) ? 'border-danger' : 'border-outline-variant/30 focus-within:border-primary/40'}`}>
+                              <Mail className="w-4 h-4 text-on-surface-variant shrink-0" />
+                              <input
+                                type="email"
+                                autoComplete="email"
+                                placeholder="you@gmail.com"
+                                value={profileData.email}
+                                onChange={(e) => setProfileData({ ...profileData, email: e.target.value })}
+                                className="w-full bg-transparent outline-none text-on-surface placeholder:text-on-surface-variant/40 min-w-0"
+                              />
+                            </div>
+                          </label>
+                          <label className="space-y-2">
+                            <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Phone Number</span>
+                            <div className={`flex items-center bg-surface-low/80 border rounded-xl px-4 py-3 ${profilePhoneDigits.length > 0 && profilePhoneDigits.length < INDIAN_PHONE_LENGTH ? 'border-danger' : 'border-outline-variant/30 focus-within:border-primary/40'}`}>
+                              <span className="text-on-surface-variant font-semibold shrink-0">+91</span>
+                              <span className="mx-3 h-5 w-px bg-white/10 shrink-0" />
+                              <input
+                                type="tel"
+                                inputMode="numeric"
+                                autoComplete="tel-national"
+                                maxLength={INDIAN_PHONE_LENGTH}
+                                placeholder="9876543210"
+                                value={profilePhoneDigits}
+                                onChange={(e) => setProfileData({ ...profileData, phone: normalizeIndianPhoneInput(e.target.value) })}
+                                className="w-full bg-transparent outline-none text-on-surface placeholder:text-on-surface-variant/40 min-w-0"
+                              />
+                            </div>
+                          </label>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-end">
+                          <label className="space-y-2">
+                            <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">6-digit OTP</span>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              maxLength={6}
+                              placeholder="000000"
+                              value={signupOtp}
+                              onChange={(e) => setSignupOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                              className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-3 text-on-surface tracking-[0.35em] font-headline font-black focus:border-primary/40 outline-none"
+                            />
+                          </label>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={handleSendSignupOtp}
+                              disabled={isSendingSignupOtp}
+                              className="px-4 py-3 rounded-xl bg-primary/15 border border-primary/30 text-primary font-headline font-bold text-xs uppercase tracking-wider disabled:opacity-50"
+                            >
+                              {isSendingSignupOtp ? 'Sending...' : signupOtpSent ? 'Resend' : 'Send OTP'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleVerifySignupOtp}
+                              disabled={!signupOtpSent || isVerifyingSignupOtp || signupOtpVerified}
+                              className={`px-4 py-3 rounded-xl font-headline font-bold text-xs uppercase tracking-wider ${signupOtpVerified ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-400' : 'bg-white/10 border border-white/10 text-white disabled:opacity-40'}`}
+                            >
+                              {signupOtpVerified ? 'Verified' : isVerifyingSignupOtp ? 'Checking...' : 'Verify'}
+                            </button>
+                          </div>
+                        </div>
+
+                        {signupOtpMessage && (
+                          <p className={`text-xs font-semibold ${signupOtpVerified ? 'text-emerald-400' : signupOtpMessage.toLowerCase().includes('sent') ? 'text-primary' : 'text-danger'}`}>
+                            {signupOtpMessage}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <label className="space-y-2">
+                            <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Phone Number</span>
+                            <div className={`flex items-center bg-surface-low/80 border rounded-xl px-4 py-3 ${profilePhoneDigits.length > 0 && profilePhoneDigits.length < INDIAN_PHONE_LENGTH ? 'border-danger' : 'border-outline-variant/30 focus-within:border-primary/40'}`}>
+                              <span className="text-on-surface-variant font-semibold shrink-0">+91</span>
+                              <span className="mx-3 h-5 w-px bg-white/10 shrink-0" />
+                              <input
+                                type="tel"
+                                inputMode="numeric"
+                                autoComplete="tel-national"
+                                maxLength={INDIAN_PHONE_LENGTH}
+                                placeholder="9876543210"
+                                value={profilePhoneDigits}
+                                onChange={(e) => setProfileData({ ...profileData, phone: normalizeIndianPhoneInput(e.target.value) })}
+                                className="w-full bg-transparent outline-none text-on-surface placeholder:text-on-surface-variant/40 min-w-0"
+                              />
+                            </div>
+                          </label>
+                          <div className="space-y-2">
+                            <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Safety PIN</span>
+                            <div className="flex gap-2">
+                              {profileData.pin.map((digit, i) => (
+                                <input
+                                  key={i}
+                                  type="password"
+                                  inputMode="numeric"
+                                  maxLength={1}
+                                  value={digit}
+                                  onChange={(e) => handleProfilePinChange(i, e.target.value)}
+                                  id={`profile-pin-${i}`}
+                                  className="w-full h-12 text-center text-lg font-bold bg-surface-low/80 border border-outline-variant/30 rounded-xl focus:border-primary focus:ring-1 focus:ring-primary/20 outline-none text-primary"
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleLoginProfile}
+                          disabled={!profileLoginReady || isLoggingInProfile}
+                          className={`w-full py-4 rounded-xl font-headline font-black tracking-wider flex items-center justify-center gap-2 ${profileLoginReady ? 'bg-white text-black' : 'bg-white/10 text-white/40 cursor-not-allowed'}`}
+                        >
+                          <User className="w-5 h-5" />
+                          {isLoggingInProfile ? 'LOGGING IN...' : 'LOGIN PROFILE'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                {profileAuthMode === 'signup' && (
+                  <>
                 {/* Identity Group */}
                 <div className="space-y-5">
                   <div className="group relative">
@@ -2179,16 +3568,6 @@ Reply NO — I cannot reach them`;
                       type="text"
                       value={profileData.fullName}
                       onChange={(e) => setProfileData({ ...profileData, fullName: e.target.value })}
-                    />
-                  </div>
-                  <div className="group relative">
-                    <label className="block font-label text-[10px] uppercase tracking-widest text-on-surface-variant mb-2 ml-1 font-bold">Phone Number</label>
-                    <input 
-                      className="w-full bg-surface-container-highest border border-outline-variant/15 rounded-xl px-5 py-4 focus:ring-1 focus:ring-primary/20 focus:border-primary/20 transition-all outline-none text-on-surface placeholder:text-on-secondary" 
-                      placeholder="919876543210" 
-                      type="tel"
-                      value={profileData.phone}
-                      onChange={(e) => setProfileData({ ...profileData, phone: e.target.value })}
                     />
                   </div>
                   <div className="group relative">
@@ -2334,25 +3713,17 @@ Reply NO — I cannot reach them`;
                     onClick={() => {
                       handleSaveProfile();
                     }}
-                    disabled={!profileEmergencyContactsValid}
-                    className={`w-full py-5 rounded-2xl text-on-primary font-headline font-bold text-lg tracking-wide shadow-lg shadow-primary/20 transition-all flex items-center justify-center gap-3 ${profileEmergencyContactsValid ? 'bg-linear-to-br from-primary to-tertiary active:scale-[0.98]' : 'bg-white/10 text-white/40 shadow-none cursor-not-allowed'}`} 
+                    disabled={!profileSignupReady || isSavingProfile}
+                    className={`w-full py-5 rounded-2xl text-on-primary font-headline font-bold text-lg tracking-wide shadow-lg shadow-primary/20 transition-all flex items-center justify-center gap-3 ${profileSignupReady ? 'bg-linear-to-br from-primary to-tertiary active:scale-[0.98]' : 'bg-white/10 text-white/40 shadow-none cursor-not-allowed'}`} 
                     type="button"
                   >
                     <ShieldCheck className="w-6 h-6" />
-                    SAVE PROFILE
-                  </button>
-                  <button 
-                    onClick={() => {
-                      handleLoginProfile();
-                    }}
-                    className="w-full mt-4 bg-surface-container border border-outline-variant/15 py-5 rounded-2xl text-on-surface font-headline font-bold text-lg tracking-wide active:scale-[0.98] transition-all flex items-center justify-center gap-3" 
-                    type="button"
-                  >
-                    <User className="w-6 h-6" />
-                    LOGIN PROFILE
+                    {isSavingProfile ? 'SAVING PROFILE...' : 'SAVE PROFILE'}
                   </button>
                   <p className="text-center text-[10px] text-on-surface-variant/40 mt-4 uppercase tracking-[0.2em] font-bold">Secured by Saahas Cloud Encryption</p>
                 </div>
+                  </>
+                )}
               </form>
             </main>
 
@@ -2380,6 +3751,630 @@ Reply NO — I cannot reach them`;
                 <span className="font-body text-[10px] font-medium mt-1">Profile</span>
               </button>
             </nav>
+          </motion.div>
+        ) : currentScreen === 'guard-routine-setup' ? (
+          <motion.div
+            key="guard-routine-setup"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+            className="min-h-screen flex flex-col bg-background relative"
+          >
+            <header className="px-6 pt-8 pb-4 flex items-center justify-between sticky top-0 z-50 bg-background/80 backdrop-blur-xl border-b border-outline-variant/10">
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={() => setCurrentScreen('landing')}
+                  className="p-2 -ml-2 rounded-full hover:bg-surface-highest transition-colors active:scale-95 duration-200"
+                >
+                  <ArrowLeft className="w-6 h-6 text-primary" />
+                </button>
+                <div>
+                  <h1 className="font-headline font-bold text-white tracking-tight text-xl">Guard-Routine</h1>
+                  <p className="text-[10px] text-on-surface-variant uppercase tracking-[0.18em] font-bold">Default auto-start</p>
+                </div>
+              </div>
+              <ComponentTooltip
+                title="Guard-Routine"
+                description="Arms the automatic safety routine. When enabled, Saahas can start a grace timer from Time, Place, or Gait triggers."
+                side="left"
+              >
+                <button
+                  type="button"
+                  onClick={() => setGuardRoutine((prev) => ({ ...prev, enabled: !prev.enabled }))}
+                  className={`w-14 h-8 rounded-full p-1 transition-colors ${guardRoutine.enabled ? 'bg-emerald-500' : 'bg-white/10'}`}
+                  aria-label="Toggle Guard-Routine"
+                >
+                  <span className={`block w-6 h-6 rounded-full bg-white shadow-lg transition-transform ${guardRoutine.enabled ? 'translate-x-6' : 'translate-x-0'}`} />
+                </button>
+              </ComponentTooltip>
+            </header>
+
+            <main className="flex-1 px-6 pt-6 pb-12 overflow-y-auto max-w-2xl mx-auto w-full">
+              <div className="space-y-6">
+                <section className="rounded-3xl bg-surface-high/50 border border-white/10 p-5 space-y-5">
+                  <div className="flex items-start gap-4">
+                    <div className="w-12 h-12 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0">
+                      <ShieldCheck className="w-6 h-6" />
+                    </div>
+                    <div className="min-w-0">
+                      <h2 className="text-xl font-headline font-black text-white">Auto-start protection</h2>
+                      <p className="text-sm text-on-surface-variant leading-relaxed mt-1">
+                        Saahas starts a grace timer first, sends WhatsApp to you, then starts the monitored walk if you do not cancel with PIN.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <ComponentTooltip
+                      title="Routine Name"
+                      description="A private label for this automatic routine, such as Night Walk Home or College Route."
+                    >
+                      <label className="space-y-2 block">
+                        <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Routine Name</span>
+                        <input
+                          value={guardRoutine.name}
+                          onChange={(e) => setGuardRoutine((prev) => ({ ...prev, name: e.target.value }))}
+                          className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-3 text-on-surface focus:border-primary focus:outline-none"
+                        />
+                      </label>
+                    </ComponentTooltip>
+                    <ComponentTooltip
+                      title="Walk Duration"
+                      description="How long Saahas should monitor the walk after the routine starts. Custom lets you choose an exact duration."
+                    >
+                      <label className="space-y-2 block">
+                        <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Walk Duration</span>
+                        <select
+                          value={guardDurationSelectValue}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setGuardRoutine((prev) => ({
+                              ...prev,
+                              durationMinutes: value === 'custom'
+                                ? (WALK_DURATION_PRESETS.includes(prev.durationMinutes) ? 25 : prev.durationMinutes)
+                                : Number(value),
+                            }));
+                          }}
+                          className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-3 text-on-surface focus:border-primary focus:outline-none"
+                        >
+                          {WALK_DURATION_PRESETS.map((minutes) => (
+                            <option key={minutes} value={minutes}>{minutes} minutes</option>
+                          ))}
+                          <option value="custom">Custom</option>
+                        </select>
+                        {guardDurationSelectValue === 'custom' && (
+                          <input
+                            type="number"
+                            min={1}
+                            max={240}
+                            value={guardRoutine.durationMinutes}
+                            onChange={(e) => setGuardRoutine((prev) => ({
+                              ...prev,
+                              durationMinutes: Math.max(1, Math.min(240, Number(e.target.value) || 1)),
+                            }))}
+                            className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-3 text-on-surface focus:border-primary focus:outline-none"
+                            aria-label="Custom walk duration in minutes"
+                          />
+                        )}
+                      </label>
+                    </ComponentTooltip>
+                  </div>
+                </section>
+
+                <section className="rounded-3xl bg-surface-high/50 border border-white/10 p-5 space-y-4">
+                  <h3 className="text-sm font-headline font-bold text-white uppercase tracking-widest">Trigger</h3>
+                  <div className="grid grid-cols-3 gap-2 bg-surface-low/80 p-1.5 rounded-2xl border border-outline-variant/20">
+                    {([
+                      {
+                        key: 'schedule',
+                        label: 'Time',
+                        icon: Clock,
+                        description: 'Starts the grace timer at the selected time on the selected days.',
+                      },
+                      {
+                        key: 'geofence',
+                        label: 'Place',
+                        icon: MapPin,
+                        description: 'Starts when the phone leaves the saved place by the selected radius.',
+                      },
+                      {
+                        key: 'gait',
+                        label: 'Gait',
+                        icon: Footprints,
+                        description: 'Starts automatically when Saahas detects a real walk from motion patterns.',
+                      },
+                    ] as const).map((item) => {
+                      const Icon = item.icon;
+                      const active = guardRoutine.trigger === item.key;
+                      return (
+                        <ComponentTooltip
+                          key={item.key}
+                          title={`${item.label} Trigger`}
+                          description={item.description}
+                          side="bottom"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setGuardRoutine((prev) => ({
+                              ...prev,
+                              trigger: item.key,
+                              gaitRequiredSeconds: item.key === 'gait' ? SMART_GAIT_REQUIRED_SECONDS : prev.gaitRequiredSeconds,
+                            }))}
+                            className={`w-full py-3 rounded-xl flex flex-col items-center gap-1 text-[11px] font-bold transition-colors ${active ? 'bg-primary text-white shadow-[0_0_18px_rgba(79,70,229,0.45)]' : 'text-on-surface-variant hover:text-white'}`}
+                          >
+                            <Icon className="w-4 h-4" />
+                            {item.label}
+                          </button>
+                        </ComponentTooltip>
+                      );
+                    })}
+                  </div>
+
+                  {guardRoutine.trigger === 'schedule' && (
+                    <div className="space-y-4">
+                      <ComponentTooltip
+                        title="Start Time"
+                        description="The local time when Saahas should arm the routine and begin the PIN grace period."
+                      >
+                        <label className="space-y-2 block">
+                          <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Start Time</span>
+                          <input
+                            type="time"
+                            value={guardRoutine.startTime}
+                            onChange={(e) => setGuardRoutine((prev) => ({ ...prev, startTime: e.target.value }))}
+                            className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-3 text-on-surface focus:border-primary focus:outline-none"
+                          />
+                        </label>
+                      </ComponentTooltip>
+                      <ComponentTooltip
+                        title="Days"
+                        description="Choose which weekdays this scheduled routine can auto-start."
+                      >
+                        <div className="space-y-2">
+                          <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Days</span>
+                          <div className="grid grid-cols-7 gap-1.5">
+                            {DAY_LABELS.map((label, day) => {
+                              const active = guardRoutine.days.includes(day);
+                              return (
+                                <button
+                                  key={label}
+                                  type="button"
+                                  onClick={() => setGuardRoutine((prev) => ({
+                                    ...prev,
+                                    days: active
+                                      ? prev.days.filter((item) => item !== day)
+                                      : [...prev.days, day].sort((a, b) => a - b),
+                                  }))}
+                                  className={`h-10 rounded-xl text-[10px] font-bold transition-colors ${active ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-white/5 text-on-surface-variant border border-white/10'}`}
+                                >
+                                  {label.slice(0, 1)}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <p className="text-[11px] text-on-surface-variant">{guardRoutineDaysLabel}</p>
+                        </div>
+                      </ComponentTooltip>
+                    </div>
+                  )}
+
+                  {guardRoutine.trigger === 'geofence' && (
+                    <div className="space-y-4">
+                      <ComponentTooltip
+                        title="Saved Place"
+                        description="The location Saahas watches from. A Place routine starts when you leave this saved origin."
+                      >
+                        <div className="rounded-2xl bg-white/5 border border-white/10 p-4 flex items-center gap-3">
+                          <MapPin className="w-5 h-5 text-primary shrink-0" />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-bold text-white truncate">{guardOriginDisplayLabel}</p>
+                            <p className="text-[11px] text-on-surface-variant">
+                              {guardRoutine.originLat !== null && guardRoutine.originLng !== null
+                                ? 'Saved from current GPS'
+                                : 'Use current GPS as the departure point'}
+                            </p>
+                          </div>
+                        </div>
+                      </ComponentTooltip>
+                      <ComponentTooltip
+                        title="Save Current Location"
+                        description="Stores your current GPS position as the routine origin for Place detection."
+                      >
+                        <button
+                          type="button"
+                          onClick={saveGuardRoutineOriginFromGps}
+                          disabled={isSavingGuardOrigin}
+                          className="w-full py-3 rounded-xl bg-primary/15 text-primary border border-primary/30 font-headline font-bold flex items-center justify-center gap-2"
+                        >
+                          <Navigation className="w-4 h-4" />
+                          {isSavingGuardOrigin ? 'FINDING LOCATION...' : 'SAVE CURRENT LOCATION'}
+                        </button>
+                      </ComponentTooltip>
+                      <div className="grid grid-cols-2 gap-4">
+                        <ComponentTooltip
+                          title="Radius"
+                          description="How far from the saved place the phone must move before Saahas considers the walk started."
+                        >
+                          <label className="space-y-2 block">
+                            <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Radius</span>
+                            <select
+                              value={guardRadiusSelectValue}
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                setGuardRoutine((prev) => ({
+                                  ...prev,
+                                  geofenceRadiusMeters: value === 'custom'
+                                    ? (GEOFENCE_RADIUS_PRESETS.includes(prev.geofenceRadiusMeters) ? 150 : prev.geofenceRadiusMeters)
+                                    : Number(value),
+                                }));
+                              }}
+                              className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-3 text-on-surface focus:border-primary focus:outline-none"
+                            >
+                              {GEOFENCE_RADIUS_PRESETS.map((meters) => (
+                                <option key={meters} value={meters}>{meters} m</option>
+                              ))}
+                              <option value="custom">Custom</option>
+                            </select>
+                            {guardRadiusSelectValue === 'custom' && (
+                              <input
+                                type="number"
+                                min={20}
+                                max={2000}
+                                value={guardRoutine.geofenceRadiusMeters}
+                                onChange={(e) => setGuardRoutine((prev) => ({
+                                  ...prev,
+                                  geofenceRadiusMeters: Math.max(20, Math.min(2000, Number(e.target.value) || 20)),
+                                }))}
+                                className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-3 text-on-surface focus:border-primary focus:outline-none"
+                                aria-label="Custom radius in meters"
+                              />
+                            )}
+                          </label>
+                        </ComponentTooltip>
+                        <ComponentTooltip
+                          title="After"
+                          description="The earliest time Place detection can trigger, useful for avoiding daytime false starts."
+                        >
+                          <label className="space-y-2 block">
+                            <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">After</span>
+                            <input
+                              type="time"
+                              value={guardRoutine.geofenceEarliestTime}
+                              onChange={(e) => setGuardRoutine((prev) => ({ ...prev, geofenceEarliestTime: e.target.value }))}
+                              className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-3 text-on-surface focus:border-primary focus:outline-none"
+                            />
+                          </label>
+                        </ComponentTooltip>
+                      </div>
+                    </div>
+                  )}
+
+                  {guardRoutine.trigger === 'gait' && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <ComponentTooltip
+                          title="Gait Window Start"
+                          description="The time when Saahas begins listening for walk-like movement."
+                        >
+                          <label className="space-y-2 block">
+                            <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">From</span>
+                            <input
+                              type="time"
+                              value={guardRoutine.gaitWindowStart}
+                              onChange={(e) => setGuardRoutine((prev) => ({ ...prev, gaitWindowStart: e.target.value }))}
+                              className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-3 text-on-surface focus:border-primary focus:outline-none"
+                            />
+                          </label>
+                        </ComponentTooltip>
+                        <ComponentTooltip
+                          title="Gait Window End"
+                          description="The time when automatic gait detection stops listening for this routine."
+                        >
+                          <label className="space-y-2 block">
+                            <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Until</span>
+                            <input
+                              type="time"
+                              value={guardRoutine.gaitWindowEnd}
+                              onChange={(e) => setGuardRoutine((prev) => ({ ...prev, gaitWindowEnd: e.target.value }))}
+                              className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-3 text-on-surface focus:border-primary focus:outline-none"
+                            />
+                          </label>
+                        </ComponentTooltip>
+                      </div>
+                      <ComponentTooltip
+                        title="Smart Gait Detection"
+                        description="Uses accelerometer movement to detect walking after about 30 seconds or 40 steps, without asking the user to tune sensitivity."
+                      >
+                        <div className="rounded-2xl bg-primary/10 border border-primary/25 p-4 flex items-center gap-4">
+                          <div className="relative w-14 h-14 rounded-full flex items-center justify-center shrink-0">
+                            <div
+                              className="absolute inset-0 rounded-full"
+                              style={{
+                                background: `conic-gradient(#7C3AED ${guardGaitProgressPercent * 3.6}deg, rgba(255,255,255,0.08) 0deg)`,
+                              }}
+                            />
+                            <div className="absolute inset-1.5 rounded-full bg-surface-high flex items-center justify-center">
+                              <span className="text-[11px] font-headline font-black text-white">
+                                {guardGaitAnalysis.active ? `${guardGaitAnalysis.remainingSeconds}s` : `${SMART_GAIT_REQUIRED_SECONDS}s`}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-sm font-headline font-black text-white">Smart gait detection</p>
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[9px] font-bold uppercase tracking-wider">
+                                App decides
+                              </span>
+                            </div>
+                            <p className="text-[12px] text-on-surface-variant leading-relaxed mt-1">
+                              The app will auto-detect your walk after about {SMART_GAIT_REQUIRED_SECONDS} seconds of moving.
+                            </p>
+                            <p className={`text-[11px] font-semibold mt-2 ${guardGaitAnalysis.active ? 'text-emerald-400' : 'text-primary'}`}>
+                              {guardGaitAnalysis.active
+                                ? `Analyzing your stride... ${guardGaitAnalysis.remainingSeconds}s remaining · ~${guardGaitAnalysis.stepEstimate}/${SMART_GAIT_STEP_TARGET} steps`
+                                : `Uses a quiet ${SMART_GAIT_REQUIRED_SECONDS}s / ${SMART_GAIT_STEP_TARGET}-step smart default with no manual slider.`}
+                            </p>
+                          </div>
+                        </div>
+                      </ComponentTooltip>
+                      <ComponentTooltip
+                        title="Motion Sensor"
+                        description="Requests permission for accelerometer data so Gait can detect walking on supported phones."
+                      >
+                        <button
+                          type="button"
+                          onClick={requestGuardMotionPermission}
+                          className="w-full py-3 rounded-xl bg-primary/15 text-primary border border-primary/30 font-headline font-bold flex items-center justify-center gap-2"
+                        >
+                          <Activity className="w-4 h-4" />
+                          ENABLE MOTION SENSOR
+                        </button>
+                      </ComponentTooltip>
+                      {guardMotionPermission !== 'unknown' && (
+                        <p className={`text-[11px] font-semibold ${guardMotionPermission === 'granted' ? 'text-emerald-400' : 'text-danger'}`}>
+                          Motion permission: {guardMotionPermission}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </section>
+
+                <section className="rounded-3xl bg-surface-high/50 border border-white/10 p-5 space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <ComponentTooltip
+                      title="Grace Period"
+                      description="How long the user has to cancel with PIN before the monitored walk starts automatically."
+                    >
+                      <label className="space-y-2 block">
+                        <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Grace Period</span>
+                        <select
+                          value={guardGraceSelectValue}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setGuardRoutine((prev) => ({
+                              ...prev,
+                              graceSeconds: value === 'custom'
+                                ? (GRACE_PERIOD_PRESETS.includes(prev.graceSeconds) ? 90 : prev.graceSeconds)
+                                : Number(value),
+                            }));
+                          }}
+                          className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-3 text-on-surface focus:border-primary focus:outline-none"
+                        >
+                          {GRACE_PERIOD_PRESETS.map((seconds) => (
+                            <option key={seconds} value={seconds}>{Math.ceil(seconds / 60)} min</option>
+                          ))}
+                          <option value="custom">Custom</option>
+                        </select>
+                        {guardGraceSelectValue === 'custom' && (
+                          <input
+                            type="number"
+                            min={15}
+                            max={1800}
+                            value={guardRoutine.graceSeconds}
+                            onChange={(e) => setGuardRoutine((prev) => ({
+                              ...prev,
+                              graceSeconds: Math.max(15, Math.min(1800, Number(e.target.value) || 15)),
+                            }))}
+                            className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-3 text-on-surface focus:border-primary focus:outline-none"
+                            aria-label="Custom grace period in seconds"
+                          />
+                        )}
+                      </label>
+                    </ComponentTooltip>
+                    <ComponentTooltip
+                      title="Readiness"
+                      description="Shows whether profile phone, PIN, two emergency contacts, and the routine toggle are ready for auto-start."
+                      side="left"
+                    >
+                      <div className="rounded-2xl bg-white/5 border border-white/10 p-3 flex flex-col justify-center">
+                        <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Readiness</span>
+                        <span className={`text-sm font-bold mt-1 ${guardRoutineReady ? 'text-emerald-400' : 'text-amber-400'}`}>
+                          {guardRoutineReady ? 'Ready' : 'Needs profile details'}
+                        </span>
+                      </div>
+                    </ComponentTooltip>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <ComponentTooltip
+                      title="Save Routine"
+                      description="Stores these Guard-Routine settings on this device and returns to the home screen."
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          showTemporaryToast('Guard-Routine saved.');
+                          setCurrentScreen('landing');
+                        }}
+                        className="w-full py-4 rounded-xl bg-white text-black font-headline font-black tracking-wider"
+                      >
+                        SAVE ROUTINE
+                      </button>
+                    </ComponentTooltip>
+                    <ComponentTooltip
+                      title="Test Start"
+                      description="Runs the routine immediately so you can verify the grace timer and WhatsApp flow before relying on it."
+                      side="left"
+                    >
+                      <button
+                        type="button"
+                        disabled={!guardRoutineReady}
+                        onClick={() => triggerGuardRoutine(guardRoutine.trigger, getGuardTriggerLabel(guardRoutine.trigger), `manual-test:${Date.now()}`)}
+                        className={`w-full py-4 rounded-xl font-headline font-black tracking-wider flex items-center justify-center gap-2 ${guardRoutineReady ? 'bg-primary text-white' : 'bg-white/10 text-white/40 cursor-not-allowed'}`}
+                      >
+                        <Bell className="w-4 h-4" />
+                        TEST START
+                      </button>
+                    </ComponentTooltip>
+                  </div>
+                </section>
+              </div>
+            </main>
+          </motion.div>
+        ) : currentScreen === 'guard-routine-grace' ? (
+          <motion.div
+            key="guard-routine-grace"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="min-h-screen bg-background flex flex-col px-6 py-8 relative overflow-hidden"
+          >
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_18%,rgba(16,185,129,0.14),transparent_42%)] pointer-events-none" />
+            <header className="relative z-10 flex justify-between items-center mb-8">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.25em] text-emerald-400 font-bold">Guard-Routine</p>
+                <h1 className="text-2xl font-headline font-black text-white">Grace Period</h1>
+              </div>
+              <div className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold uppercase tracking-wider">
+                User notified
+              </div>
+            </header>
+
+            {pendingGuardRoutine ? (
+              <main className="relative z-10 flex-1 flex flex-col max-w-md mx-auto w-full">
+                <section className="text-center pt-8">
+                  <div className="relative inline-flex items-center justify-center mb-8">
+                    <motion.div
+                      animate={{ scale: [1, 1.18, 1], opacity: [0.28, 0.08, 0.28] }}
+                      transition={{ repeat: Infinity, duration: 2.4 }}
+                      className="absolute inset-0 bg-emerald-500 rounded-full blur-3xl scale-150"
+                    />
+                    <div className="relative w-28 h-28 rounded-full bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center">
+                      <ShieldCheck className="w-14 h-14 text-emerald-400" />
+                    </div>
+                  </div>
+
+                  <p className="text-sm text-on-surface-variant font-semibold mb-2">{pendingGuardRoutine.routineName}</p>
+                  <div className="text-7xl font-headline font-black text-white tabular-nums tracking-tighter">
+                    {formatTime(guardGraceTimeLeft)}
+                  </div>
+                  <p className="text-[10px] uppercase tracking-[0.25em] text-on-surface-variant font-bold mt-3">
+                    Active walk starts if not cancelled
+                  </p>
+                </section>
+
+                <section className="mt-10 rounded-3xl bg-white/5 border border-white/10 p-5 space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Trigger</p>
+                      <p className="text-sm text-white font-bold mt-1">{pendingGuardRoutine.triggerLabel}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Duration</p>
+                      <p className="text-sm text-white font-bold mt-1">{pendingGuardRoutine.durationMinutes} minutes</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 rounded-2xl bg-black/20 border border-white/10 p-3">
+                    <Bell className="w-5 h-5 text-emerald-400 shrink-0" />
+                    <p className="text-[12px] text-on-surface-variant leading-relaxed">
+                      WhatsApp was sent to your number. Emergency contacts wait until the grace period ends.
+                    </p>
+                  </div>
+                </section>
+
+                <section className="mt-auto pt-8">
+                  <div className="text-center mb-5">
+                    <h2 className="text-lg font-headline font-bold text-white">Cancel with Safety PIN</h2>
+                    <p className={`text-sm mt-1 ${guardCancelPinError ? 'text-danger' : guardCancelPinSuccess ? 'text-emerald-400' : 'text-on-surface-variant'}`}>
+                      {guardCancelPinSuccess ? 'Routine cancelled safely' : guardCancelPinError ? 'Wrong PIN. Guard remains armed.' : `Enter PIN during the ${guardRoutineGraceMinutes}-minute grace period`}
+                    </p>
+                  </div>
+
+                  <div className="flex justify-center gap-3 mb-6">
+                    {[0, 1, 2, 3].map((index) => (
+                      <motion.div
+                        key={index}
+                        animate={guardCancelPinError ? { x: [0, -8, 8, -8, 8, 0] } : {}}
+                        className={`w-14 h-16 rounded-2xl border-2 flex items-center justify-center transition-colors ${
+                          guardCancelPinSuccess
+                            ? 'border-emerald-400 bg-emerald-500/10'
+                            : guardCancelPinError
+                              ? 'border-danger bg-danger/10'
+                              : guardCancelPinAttempt.length > index
+                                ? 'border-white/25 bg-white/10'
+                                : 'border-white/10 bg-white/5'
+                        }`}
+                      >
+                        {guardCancelPinSuccess ? (
+                          <CheckCircle className="w-6 h-6 text-emerald-400" />
+                        ) : guardCancelPinAttempt.length > index ? (
+                          <div className="w-3 h-3 rounded-full bg-white" />
+                        ) : null}
+                      </motion.div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3 max-w-xs mx-auto">
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => (
+                      <button
+                        key={num}
+                        type="button"
+                        onClick={() => handleGuardCancelPinInput(num.toString())}
+                        className="h-14 rounded-2xl bg-white/5 hover:bg-white/10 active:scale-95 transition-all text-xl font-bold text-white"
+                      >
+                        {num}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => startPendingGuardRoutineWalk()}
+                      className="h-14 rounded-2xl bg-emerald-500/15 border border-emerald-500/25 active:scale-95 transition-all flex items-center justify-center text-emerald-400"
+                      aria-label="Start walk now"
+                    >
+                      <ArrowRight className="w-5 h-5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleGuardCancelPinInput('0')}
+                      className="h-14 rounded-2xl bg-white/5 hover:bg-white/10 active:scale-95 transition-all text-xl font-bold text-white"
+                    >
+                      0
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleGuardCancelPinBackspace}
+                      className="h-14 rounded-2xl bg-white/5 hover:bg-white/10 active:scale-95 transition-all flex items-center justify-center text-white"
+                      aria-label="Backspace"
+                    >
+                      <Delete className="w-5 h-5" />
+                    </button>
+                  </div>
+                </section>
+              </main>
+            ) : (
+              <main className="relative z-10 flex-1 flex flex-col items-center justify-center text-center">
+                <Shield className="w-16 h-16 text-on-surface-variant mb-4" />
+                <h2 className="text-xl font-headline font-bold text-white">No pending routine</h2>
+                <button
+                  type="button"
+                  onClick={() => setCurrentScreen('landing')}
+                  className="mt-6 px-6 py-3 rounded-xl bg-white text-black font-headline font-bold"
+                >
+                  BACK HOME
+                </button>
+              </main>
+            )}
           </motion.div>
         ) : currentScreen === 'active-walk' ? (
           <motion.div
@@ -2440,8 +4435,13 @@ Reply NO — I cannot reach them`;
               {/* Header Info */}
               <div className="text-center space-y-1 mb-6">
                 <p className="text-on-surface-variant font-label text-[10px] uppercase tracking-[0.15em] font-bold">
-                  Walk started {startTime} · {totalTime / 60} min walk
+                  {activeWalkSource === 'guard-routine' ? 'Guard-Routine started' : 'Walk started'} {startTime} · {totalTime / 60} min walk
                 </p>
+                {activeWalkSource === 'guard-routine' && (
+                  <p className="text-emerald-400 font-label text-[9px] uppercase tracking-[0.2em] font-bold">
+                    Auto-started after grace period
+                  </p>
+                )}
               </div>
 
               {/* Status Badges Row 1 */}
@@ -2462,6 +4462,14 @@ Reply NO — I cannot reach them`;
                   <Users className="w-3 h-3" />
                   <span className="text-[9px] font-bold uppercase tracking-wider">2 Contacts Ready</span>
                 </div>
+                {activeWalkSource === 'guard-routine' && (
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                    <Clock className="w-3 h-3" />
+                    <span className="text-[9px] font-bold uppercase tracking-wider truncate max-w-32">
+                      {activeWalkTriggerLabel || 'Auto Start'}
+                    </span>
+                  </div>
+                )}
                 <motion.button 
                   whileTap={{ scale: 0.95 }}
                   onClick={() => setCurrentScreen('shadow-mode')}
@@ -2556,6 +4564,7 @@ Reply NO — I cannot reach them`;
                     e.stopPropagation();
                     setPinAttempt([]);
                     setPinConfirmTimer(30);
+                    setPinConfirmMode('safe-arrival');
                     setPinError(false);
                     setPinBufferActive(false);
                     setPinSuccess(false);
@@ -2717,7 +4726,7 @@ Reply NO — I cannot reach them`;
             {/* Header */}
             <header className="flex justify-between items-center mb-12">
               <div className="w-10" />
-              <h1 className="text-2xl font-bold text-white font-headline">Confirm Safe Arrival</h1>
+              <h1 className="text-2xl font-bold text-white font-headline">{pinConfirmTitle}</h1>
               <button 
                 onClick={handlePinConfirmClose}
                 className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center hover:bg-white/10 transition-colors"
@@ -2729,17 +4738,26 @@ Reply NO — I cannot reach them`;
             {/* Icon Section */}
             <div className="flex flex-col items-center mb-8">
               <div className="relative">
-                <div className="absolute inset-0 bg-emerald-500/20 blur-2xl rounded-full scale-150" />
-                <div className="relative w-20 h-20 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
-                  <ShieldCheck className="w-10 h-10 text-emerald-400" />
+                <div className={`absolute inset-0 blur-2xl rounded-full scale-150 ${isSnatchPinCheck ? 'bg-red-500/20' : 'bg-emerald-500/20'}`} />
+                <div className={`relative w-20 h-20 rounded-full border flex items-center justify-center ${isSnatchPinCheck ? 'bg-red-500/10 border-red-500/20' : 'bg-emerald-500/10 border-emerald-500/20'}`}>
+                  {isSnatchPinCheck ? (
+                    <ShieldAlert className="w-10 h-10 text-red-400" />
+                  ) : (
+                    <ShieldCheck className="w-10 h-10 text-emerald-400" />
+                  )}
                 </div>
               </div>
             </div>
 
             {/* Instructions */}
             <div className="text-center space-y-2 mb-10">
-              <h2 className="text-lg font-medium text-white">{pinBufferActive ? 'Enter correct PIN to stop alert' : 'Enter your secret PIN'}</h2>
-              <p className="text-sm text-red-500 font-medium">{pinBufferActive ? 'Countdown will continue until the correct PIN is entered' : 'Enter your PIN to confirm safe arrival'}</p>
+              <h2 className="text-lg font-medium text-white">{pinConfirmHeading}</h2>
+              <p className="text-sm text-red-500 font-medium">{pinConfirmDescription}</p>
+              {isSnatchPinCheck && (
+                <p className="text-xs text-on-surface-variant font-semibold">
+                  Remaining walk time: <span className="text-white tabular-nums">{formatTime(timeLeft)}</span>
+                </p>
+              )}
             </div>
 
             {/* PIN Boxes */}
@@ -2786,7 +4804,7 @@ Reply NO — I cannot reach them`;
 
             {(pinError || pinSuccess) && (
               <p className={`text-center mb-4 font-medium ${pinSuccess ? 'text-[#00C853] text-[14px]' : pinWrongAttemptCount > 1 ? 'text-[#FF3B30] text-[13px]' : 'text-[#FF3B30] text-[14px]'}`}>
-                {pinSuccess ? 'Safe arrival confirmed' : pinWrongAttemptCount > 1 ? `Attempt ${pinWrongAttemptCount}. Alert fires in ${pinConfirmTimer} seconds` : 'Incorrect PIN'}
+                {pinSuccess ? (isSnatchPinCheck ? 'Saahas unlocked' : 'Safe arrival confirmed') : pinWrongAttemptCount > 1 ? `Attempt ${pinWrongAttemptCount}. Alert fires in ${pinConfirmTimer} seconds` : 'Incorrect PIN'}
               </p>
             )}
 
@@ -3125,6 +5143,7 @@ Reply NO — I cannot reach them`;
                           setIsCallInProgress(true);
                           // Start 5 minute hidden countdown
                           fakeCallAlertTimeout.current = setTimeout(() => {
+                            setIsAlertActive(true);
                             setAlertTriggerReason('fake_call_hidden_timeout');
                             setCurrentScreen('alert-sent');
                           }, 300000);

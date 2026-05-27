@@ -3270,49 +3270,63 @@ ${currentLocationLink}
 
             {/* Middle Section: Primary Action & Features */}
             <div className="w-full max-w-sm flex flex-col items-center gap-14 -mt-8 z-10">
-              <motion.button
-                whileHover={{ scale: 1.03, translateY: -3 }}
-                whileTap={{ scale: 0.97 }}
-                initial={{ opacity: 0, y: 30 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.8, duration: 0.8, ease: [0.23, 1, 0.32, 1] }}
-                onClick={() => setCurrentScreen('guest-setup')}
-                className="w-full mb-2 py-6 bg-linear-to-r from-primary to-primary-variant rounded-[1.25rem] flex items-center justify-center gap-4 text-white font-black text-xl shadow-[0_20px_50px_-10px_rgba(79,70,229,0.6)] relative overflow-hidden group animate-pulse-primary"
+              <ComponentTooltip 
+                title="Manual Timer Walk" 
+                description="Starts safety timer. Alerts contacts if PIN is not entered." 
+                side="bottom" 
+                className="w-full"
               >
-                <div className="absolute inset-0 bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                <motion.div 
-                  className="absolute inset-0 bg-linear-to-r from-transparent via-white/30 to-transparent -translate-x-full group-hover:animate-shimmer"
-                  initial={false}
-                />
-                <span className="relative tracking-tight drop-shadow-md">START WALK NOW</span>
-                <ArrowRight className="w-6 h-6 relative group-hover:translate-x-1 transition-transform drop-shadow-md" strokeWidth={3} />
-              </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.03, translateY: -3 }}
+                  whileTap={{ scale: 0.97 }}
+                  initial={{ opacity: 0, y: 30 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.8, duration: 0.8, ease: [0.23, 1, 0.32, 1] }}
+                  onClick={() => setCurrentScreen('guest-setup')}
+                  className="w-full mb-2 py-6 bg-linear-to-r from-primary to-primary-variant rounded-[1.25rem] flex items-center justify-center gap-4 text-white font-black text-xl shadow-[0_20px_50px_-10px_rgba(79,70,229,0.6)] relative overflow-hidden group animate-pulse-primary"
+                >
+                  <div className="absolute inset-0 bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                  <motion.div 
+                    className="absolute inset-0 bg-linear-to-r from-transparent via-white/30 to-transparent -translate-x-full group-hover:animate-shimmer"
+                    initial={false}
+                  />
+                  <span className="relative tracking-tight drop-shadow-md">START WALK NOW</span>
+                  <ArrowRight className="w-6 h-6 relative group-hover:translate-x-1 transition-transform drop-shadow-md" strokeWidth={3} />
+                </motion.button>
+              </ComponentTooltip>
 
-              <motion.button
-                whileHover={{ scale: 1.02, translateY: -2 }}
-                whileTap={{ scale: 0.98 }}
-                initial={{ opacity: 0, y: 24 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 1, duration: 0.7, ease: [0.23, 1, 0.32, 1] }}
-                onClick={() => setCurrentScreen('guard-routine-setup')}
-                className="w-full rounded-2xl bg-white/5 border border-white/10 p-4 flex items-center gap-4 text-left shadow-[0_18px_45px_rgba(0,0,0,0.28)] backdrop-blur-xl"
+              <ComponentTooltip
+                title="Guard-Routine"
+                description="Auto-starts timer using Time, Place, or motion sensors."
+                side="bottom"
+                className="w-full"
               >
-                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${guardRoutine.enabled ? 'bg-emerald-500/12 text-emerald-400 border border-emerald-500/20' : 'bg-primary/10 text-primary border border-primary/20'}`}>
-                  <Clock className="w-5 h-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-headline font-black text-white">Guard-Routine</span>
-                    {guardRoutine.enabled && (
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[9px] font-bold uppercase tracking-wider">
-                        On
-                      </span>
-                    )}
+                <motion.button
+                  whileHover={{ scale: 1.02, translateY: -2 }}
+                  whileTap={{ scale: 0.98 }}
+                  initial={{ opacity: 0, y: 24 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 1, duration: 0.7, ease: [0.23, 1, 0.32, 1] }}
+                  onClick={() => setCurrentScreen('guard-routine-setup')}
+                  className="w-full rounded-2xl bg-white/5 border border-white/10 p-4 flex items-center gap-4 text-left shadow-[0_18px_45px_rgba(0,0,0,0.28)] backdrop-blur-xl"
+                >
+                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${guardRoutine.enabled ? 'bg-emerald-500/12 text-emerald-400 border border-emerald-500/20' : 'bg-primary/10 text-primary border border-primary/20'}`}>
+                    <Clock className="w-5 h-5" />
                   </div>
-                  <p className="text-[11px] text-on-surface-variant font-semibold truncate">{guardRoutineStatusLabel}</p>
-                </div>
-                <ChevronRight className="w-5 h-5 text-white/45 shrink-0" />
-              </motion.button>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-headline font-black text-white">Guard-Routine</span>
+                      {guardRoutine.enabled && (
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[9px] font-bold uppercase tracking-wider">
+                          On
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-on-surface-variant font-semibold truncate">{guardRoutineStatusLabel}</p>
+                  </div>
+                  <ChevronRight className="w-5 h-5 text-white/45 shrink-0" />
+                </motion.button>
+              </ComponentTooltip>
 
               <motion.div 
                 initial={{ opacity: 0, y: 20 }}
@@ -3320,24 +3334,47 @@ ${currentLocationLink}
                 transition={{ delay: 1.2, duration: 1 }}
                 className="flex items-center justify-around w-full px-6 py-4 rounded-3xl bg-surface-high/50 backdrop-blur-xl border border-white/5 shadow-2xl"
               >
-                <div className="flex flex-col items-center gap-2 group cursor-pointer w-1/3">
-                  <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-on-surface-variant group-hover:text-primary group-hover:bg-primary/10 transition-all duration-300">
-                    <MapPin className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                <ComponentTooltip
+                  title="Live GPS Tracking"
+                  description="Shares your active real-time location link with allies."
+                  side="bottom"
+                  className="w-1/3"
+                >
+                  <div className="flex flex-col items-center gap-2 group cursor-pointer">
+                    <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-on-surface-variant group-hover:text-primary group-hover:bg-primary/10 transition-all duration-300">
+                      <MapPin className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                    </div>
+                    <span className="text-[9px] uppercase tracking-wider text-on-surface-variant font-bold group-hover:text-on-surface transition-colors">Live GPS</span>
                   </div>
-                  <span className="text-[9px] uppercase tracking-wider text-on-surface-variant font-bold group-hover:text-on-surface transition-colors">Live GPS</span>
-                </div>
-                <div className="flex flex-col items-center gap-2 group cursor-pointer w-1/3 border-l border-r border-white/5">
-                  <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-on-surface-variant group-hover:text-danger group-hover:bg-danger/10 transition-all duration-300">
-                    <Bell className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                </ComponentTooltip>
+                
+                <ComponentTooltip
+                  title="Instant SOS Alert"
+                  description="Instantly alerts emergency contacts with your live location."
+                  side="bottom"
+                  className="w-1/3 border-l border-r border-white/5"
+                >
+                  <div className="flex flex-col items-center gap-2 group cursor-pointer">
+                    <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-on-surface-variant group-hover:text-danger group-hover:bg-danger/10 transition-all duration-300">
+                      <Bell className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                    </div>
+                    <span className="text-[9px] uppercase tracking-wider text-on-surface-variant font-bold group-hover:text-on-surface transition-colors">SOS Alert</span>
                   </div>
-                  <span className="text-[9px] uppercase tracking-wider text-on-surface-variant font-bold group-hover:text-on-surface transition-colors">SOS Alert</span>
-                </div>
-                <div className="flex flex-col items-center gap-2 group cursor-pointer w-1/3">
-                  <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-on-surface-variant group-hover:text-success group-hover:bg-success/10 transition-all duration-300">
-                    <Users className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                </ComponentTooltip>
+                
+                <ComponentTooltip
+                  title="Safe Network"
+                  description="Trusted guardians who receive your tracking links and alerts."
+                  side="bottom"
+                  className="w-1/3"
+                >
+                  <div className="flex flex-col items-center gap-2 group cursor-pointer">
+                    <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-on-surface-variant group-hover:text-success group-hover:bg-success/10 transition-all duration-300">
+                      <Users className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                    </div>
+                    <span className="text-[9px] uppercase tracking-wider text-on-surface-variant font-bold group-hover:text-on-surface transition-colors">Safe Network</span>
                   </div>
-                  <span className="text-[9px] uppercase tracking-wider text-on-surface-variant font-bold group-hover:text-on-surface transition-colors">Safe Network</span>
-                </div>
+                </ComponentTooltip>
               </motion.div>
             </div>
 
@@ -4446,98 +4483,137 @@ ${currentLocationLink}
 
               {/* Status Badges Row 1 */}
               <div className="flex justify-center gap-2 mb-2">
-                <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border ${gpsStatus === 'live' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-amber-500/10 border-amber-500/20 text-amber-400'}`}>
-                  <MapPin className="w-3 h-3" />
-                  <span className="text-[9px] font-bold uppercase tracking-wider">{gpsStatus === 'live' ? 'GPS Live' : 'GPS Limited'}</span>
-                </div>
-                <div id="badge-gait" className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
-                  <Footprints className="w-3 h-3" />
-                  <span data-gait-label className="text-[9px] font-bold uppercase tracking-wider">Gait Monitor On</span>
-                </div>
+                <ComponentTooltip
+                  title="GPS Status"
+                  description="Active real-time location lock transmitting to guardians."
+                  side="bottom"
+                >
+                  <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border ${gpsStatus === 'live' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-amber-500/10 border-amber-500/20 text-amber-400'}`}>
+                    <MapPin className="w-3 h-3" />
+                    <span className="text-[9px] font-bold uppercase tracking-wider">{gpsStatus === 'live' ? 'GPS Live' : 'GPS Limited'}</span>
+                  </div>
+                </ComponentTooltip>
+
+                <ComponentTooltip
+                  title="Gait Monitor"
+                  description="Monitors motion to detect falls or phone snatches."
+                  side="bottom"
+                >
+                  <div id="badge-gait" className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                    <Footprints className="w-3 h-3" />
+                    <span data-gait-label className="text-[9px] font-bold uppercase tracking-wider">Gait Monitor On</span>
+                  </div>
+                </ComponentTooltip>
               </div>
 
               {/* Status Badges Row 2 */}
               <div className="flex justify-center gap-2 mb-8">
-                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-sky-500/10 border border-sky-500/20 text-sky-400">
-                  <Users className="w-3 h-3" />
-                  <span className="text-[9px] font-bold uppercase tracking-wider">2 Contacts Ready</span>
-                </div>
-                {activeWalkSource === 'guard-routine' && (
-                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
-                    <Clock className="w-3 h-3" />
-                    <span className="text-[9px] font-bold uppercase tracking-wider truncate max-w-32">
-                      {activeWalkTriggerLabel || 'Auto Start'}
-                    </span>
-                  </div>
-                )}
-                <motion.button 
-                  whileTap={{ scale: 0.95 }}
-                  onClick={() => setCurrentScreen('shadow-mode')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-sky-500/10 border border-sky-500/20 text-sky-400"
+                <ComponentTooltip
+                  title="Safe Network"
+                  description="Guardians armed to receive alerts when timer expires."
+                  side="bottom"
                 >
-                  <ShieldCheck className="w-3 h-3" />
-                  <span className="text-[9px] font-bold uppercase tracking-wider">Shadow Mode Ready</span>
-                </motion.button>
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-sky-500/10 border border-sky-500/20 text-sky-400">
+                    <Users className="w-3 h-3" />
+                    <span className="text-[9px] font-bold uppercase tracking-wider">2 Contacts Ready</span>
+                  </div>
+                </ComponentTooltip>
+
+                {activeWalkSource === 'guard-routine' && (
+                  <ComponentTooltip
+                    title="Routine Trigger"
+                    description="The sensor trigger that auto-started this walk session."
+                    side="bottom"
+                  >
+                    <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                      <Clock className="w-3 h-3" />
+                      <span className="text-[9px] font-bold uppercase tracking-wider truncate max-w-32">
+                        {activeWalkTriggerLabel || 'Auto Start'}
+                      </span>
+                    </div>
+                  </ComponentTooltip>
+                )}
+
+                <ComponentTooltip
+                  title="Shadow Mode"
+                  description="Runs protection invisibly in background if screen locks."
+                  side="bottom"
+                >
+                  <motion.button 
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => setCurrentScreen('shadow-mode')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-sky-500/10 border border-sky-500/20 text-sky-400"
+                  >
+                    <ShieldCheck className="w-3 h-3" />
+                    <span className="text-[9px] font-bold uppercase tracking-wider">Shadow Mode Ready</span>
+                  </motion.button>
+                </ComponentTooltip>
               </div>
 
               {/* Countdown Section */}
               <div className="flex-1 flex flex-col items-center justify-center">
-                <div 
-                  className="relative w-55 h-55 flex items-center justify-center cursor-pointer"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setTapCount(prev => prev + 1);
-                    if (tapTimeout.current) clearTimeout(tapTimeout.current);
-                    tapTimeout.current = setTimeout(() => setTapCount(0), 1500);
-                    if (tapCount + 1 >= 3) {
-                      setCurrentScreen('fake-call');
-                    }
-                  }}
+                <ComponentTooltip
+                  title="Safety Timer"
+                  description="Tap 3x for fake call. Double-tap below for PIN."
+                  side="bottom"
                 >
-                  <svg className="absolute inset-0 w-full h-full" viewBox="0 0 220 220">
-                    <defs>
-                      <linearGradient id="timerGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stopColor="#FF8F78" />
-                        <stop offset="100%" stopColor="#FF3B30" />
-                      </linearGradient>
-                    </defs>
-                    <circle 
-                      cx="110" cy="110" r="96" 
-                      fill="transparent" 
-                      stroke="#222" 
-                      strokeWidth="8"
-                    />
-                    <motion.circle 
-                      cx="110" cy="110" r="96" 
-                      fill="transparent" 
-                      stroke="url(#timerGradient)" 
-                      strokeWidth="8"
-                      strokeLinecap="round"
-                      strokeDasharray={2 * Math.PI * 96}
-                      animate={{ strokeDashoffset: (2 * Math.PI * 96) * (1 - (timeLeft / totalTime)) }}
-                      transition={{ duration: 1, ease: "linear" }}
-                      style={{ transform: 'rotate(-90deg)', transformOrigin: 'center' }}
-                    />
-                  </svg>
-                  
-                  <div className="text-center z-10">
-                    {isBufferActive ? (
-                      <div className="animate-pulse">
-                        <span className="text-5xl font-black font-headline tracking-tighter text-red-500 tabular-nums">
-                          {bufferTime}s
-                        </span>
-                        <p className="text-red-500/60 font-label text-[9px] uppercase tracking-[0.2em] mt-1 font-bold">Confirm Arrival!</p>
-                      </div>
-                    ) : (
-                      <>
-                        <span className="text-6xl font-black font-headline tracking-tighter text-white tabular-nums">
-                          {formatTime(timeLeft)}
-                        </span>
-                        <p className="text-on-surface-variant font-label text-[9px] uppercase tracking-[0.2em] mt-1 font-bold">minutes remaining</p>
-                      </>
-                    )}
+                  <div 
+                    className="relative w-55 h-55 flex items-center justify-center cursor-pointer"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setTapCount(prev => prev + 1);
+                      if (tapTimeout.current) clearTimeout(tapTimeout.current);
+                      tapTimeout.current = setTimeout(() => setTapCount(0), 1500);
+                      if (tapCount + 1 >= 3) {
+                        setCurrentScreen('fake-call');
+                      }
+                    }}
+                  >
+                    <svg className="absolute inset-0 w-full h-full" viewBox="0 0 220 220">
+                      <defs>
+                        <linearGradient id="timerGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" stopColor="#FF8F78" />
+                          <stop offset="100%" stopColor="#FF3B30" />
+                        </linearGradient>
+                      </defs>
+                      <circle 
+                        cx="110" cy="110" r="96" 
+                        fill="transparent" 
+                        stroke="#222" 
+                        strokeWidth="8"
+                      />
+                      <motion.circle 
+                        cx="110" cy="110" r="96" 
+                        fill="transparent" 
+                        stroke="url(#timerGradient)" 
+                        strokeWidth="8"
+                        strokeLinecap="round"
+                        strokeDasharray={2 * Math.PI * 96}
+                        animate={{ strokeDashoffset: (2 * Math.PI * 96) * (1 - (timeLeft / totalTime)) }}
+                        transition={{ duration: 1, ease: "linear" }}
+                        style={{ transform: 'rotate(-90deg)', transformOrigin: 'center' }}
+                      />
+                    </svg>
+                    
+                    <div className="text-center z-10">
+                      {isBufferActive ? (
+                        <div className="animate-pulse">
+                          <span className="text-5xl font-black font-headline tracking-tighter text-red-500 tabular-nums">
+                            {bufferTime}s
+                          </span>
+                          <p className="text-red-500/60 font-label text-[9px] uppercase tracking-[0.2em] mt-1 font-bold">Confirm Arrival!</p>
+                        </div>
+                      ) : (
+                        <>
+                          <span className="text-6xl font-black font-headline tracking-tighter text-white tabular-nums">
+                            {formatTime(timeLeft)}
+                          </span>
+                          <p className="text-on-surface-variant font-label text-[9px] uppercase tracking-[0.2em] mt-1 font-bold">minutes remaining</p>
+                        </>
+                      )}
+                    </div>
                   </div>
-                </div>
+                </ComponentTooltip>
 
                 {/* Location Bar */}
                 <div className="mt-12 w-full bg-white/5 border border-white/10 rounded-2xl p-4 flex items-center gap-4">
@@ -5461,62 +5537,86 @@ ${currentLocationLink}
                 
                 {/* User Info Section */}
                 <div className="space-y-6 relative z-10">
-                  <div className="relative">
-                    <label className="absolute -top-2 left-3 px-1 bg-surface-high/80 backdrop-blur-sm text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold rounded">Your Name</label>
-                    <input 
-                      type="text" 
-                      placeholder="Enter your full name"
-                      value={guestData.name}
-                      onChange={(e) => setGuestData({ ...guestData, name: e.target.value })}
-                      className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-4 text-on-surface placeholder:text-on-surface-variant/40 focus:border-primary focus:ring-1 focus:ring-primary focus:outline-none transition-all shadow-inner font-body"
-                    />
-                  </div>
-                  <div className="relative">
-                    <label className="absolute -top-2 left-3 px-1 bg-surface-high/80 backdrop-blur-sm text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold rounded">Your Phone Number</label>
-                    <input 
-                      type="tel" 
-                      placeholder="+91 00000 00000"
-                      value={guestData.phone}
-                      onChange={(e) => setGuestData({ ...guestData, phone: e.target.value })}
-                      className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-4 text-on-surface placeholder:text-on-surface-variant/40 focus:border-primary focus:ring-1 focus:ring-primary focus:outline-none transition-all shadow-inner font-body"
-                    />
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 sm:gap-4">
+                  <ComponentTooltip
+                    title="User Name"
+                    description="Your name sent with alerts so contacts identify you."
+                    side="bottom"
+                    className="w-full"
+                  >
                     <div className="relative">
-                      <label className="absolute -top-2 left-3 px-1 bg-surface-high/80 backdrop-blur-sm text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold rounded">Emergency Contact 1</label>
-                      <div className={`w-full bg-surface-low/80 border rounded-xl px-4 py-4 flex items-center transition-all shadow-inner ${guestContact1Digits.length > 0 && guestContact1Digits.length < INDIAN_PHONE_LENGTH ? 'border-danger' : 'border-outline-variant/30 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary'}`}>
-                        <span className="text-on-surface-variant font-semibold shrink-0">+91</span>
-                        <span className="mx-3 h-5 w-px bg-white/10 shrink-0" />
-                        <input 
-                          type="tel"
-                          inputMode="numeric"
-                          autoComplete="tel-national"
-                          maxLength={INDIAN_PHONE_LENGTH}
-                          placeholder="9876543210"
-                          value={guestContact1Digits}
-                          onChange={(e) => setGuestData({ ...guestData, contact1: normalizeIndianPhoneInput(e.target.value) })}
-                          className="w-full bg-transparent text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none transition-all font-body min-w-0"
-                        />
+                      <label className="absolute -top-2 left-3 px-1 bg-surface-high/80 backdrop-blur-sm text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold rounded">Your Name</label>
+                      <input 
+                        type="text" 
+                        placeholder="Enter your full name"
+                        value={guestData.name}
+                        onChange={(e) => setGuestData({ ...guestData, name: e.target.value })}
+                        className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-4 text-on-surface placeholder:text-on-surface-variant/40 focus:border-primary focus:ring-1 focus:ring-primary focus:outline-none transition-all shadow-inner font-body"
+                      />
+                    </div>
+                  </ComponentTooltip>
+
+                  <ComponentTooltip
+                    title="User Phone"
+                    description="Your number to link and verify your safety session."
+                    side="bottom"
+                    className="w-full"
+                  >
+                    <div className="relative">
+                      <label className="absolute -top-2 left-3 px-1 bg-surface-high/80 backdrop-blur-sm text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold rounded">Your Phone Number</label>
+                      <input 
+                        type="tel" 
+                        placeholder="+91 00000 00000"
+                        value={guestData.phone}
+                        onChange={(e) => setGuestData({ ...guestData, phone: e.target.value })}
+                        className="w-full bg-surface-low/80 border border-outline-variant/30 rounded-xl px-4 py-4 text-on-surface placeholder:text-on-surface-variant/40 focus:border-primary focus:ring-1 focus:ring-primary focus:outline-none transition-all shadow-inner font-body"
+                      />
+                    </div>
+                  </ComponentTooltip>
+
+                  <ComponentTooltip
+                    title="Emergency Network"
+                    description="Two guardians who receive your tracking links and alerts."
+                    side="bottom"
+                    className="w-full"
+                  >
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 sm:gap-4">
+                      <div className="relative">
+                        <label className="absolute -top-2 left-3 px-1 bg-surface-high/80 backdrop-blur-sm text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold rounded">Emergency Contact 1</label>
+                        <div className={`w-full bg-surface-low/80 border rounded-xl px-4 py-4 flex items-center transition-all shadow-inner ${guestContact1Digits.length > 0 && guestContact1Digits.length < INDIAN_PHONE_LENGTH ? 'border-danger' : 'border-outline-variant/30 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary'}`}>
+                          <span className="text-on-surface-variant font-semibold shrink-0">+91</span>
+                          <span className="mx-3 h-5 w-px bg-white/10 shrink-0" />
+                          <input 
+                            type="tel"
+                            inputMode="numeric"
+                            autoComplete="tel-national"
+                            maxLength={INDIAN_PHONE_LENGTH}
+                            placeholder="9876543210"
+                            value={guestContact1Digits}
+                            onChange={(e) => setGuestData({ ...guestData, contact1: normalizeIndianPhoneInput(e.target.value) })}
+                            className="w-full bg-transparent text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none transition-all font-body min-w-0"
+                          />
+                        </div>
+                      </div>
+                      <div className="relative">
+                        <label className="absolute -top-2 left-3 px-1 bg-surface-high/80 backdrop-blur-sm text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold rounded">Emergency Contact 2</label>
+                        <div className={`w-full bg-surface-low/80 border rounded-xl px-4 py-4 flex items-center transition-all shadow-inner ${guestContact2Digits.length > 0 && guestContact2Digits.length < INDIAN_PHONE_LENGTH ? 'border-danger' : 'border-outline-variant/30 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary'}`}>
+                          <span className="text-on-surface-variant font-semibold shrink-0">+91</span>
+                          <span className="mx-3 h-5 w-px bg-white/10 shrink-0" />
+                          <input 
+                            type="tel"
+                            inputMode="numeric"
+                            autoComplete="tel-national"
+                            maxLength={INDIAN_PHONE_LENGTH}
+                            placeholder="9876543210"
+                            value={guestContact2Digits}
+                            onChange={(e) => setGuestData({ ...guestData, contact2: normalizeIndianPhoneInput(e.target.value) })}
+                            className="w-full bg-transparent text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none transition-all font-body min-w-0"
+                          />
+                        </div>
                       </div>
                     </div>
-                    <div className="relative">
-                      <label className="absolute -top-2 left-3 px-1 bg-surface-high/80 backdrop-blur-sm text-[10px] font-sans uppercase tracking-widest text-on-surface-variant font-bold rounded">Emergency Contact 2</label>
-                      <div className={`w-full bg-surface-low/80 border rounded-xl px-4 py-4 flex items-center transition-all shadow-inner ${guestContact2Digits.length > 0 && guestContact2Digits.length < INDIAN_PHONE_LENGTH ? 'border-danger' : 'border-outline-variant/30 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary'}`}>
-                        <span className="text-on-surface-variant font-semibold shrink-0">+91</span>
-                        <span className="mx-3 h-5 w-px bg-white/10 shrink-0" />
-                        <input 
-                          type="tel"
-                          inputMode="numeric"
-                          autoComplete="tel-national"
-                          maxLength={INDIAN_PHONE_LENGTH}
-                          placeholder="9876543210"
-                          value={guestContact2Digits}
-                          onChange={(e) => setGuestData({ ...guestData, contact2: normalizeIndianPhoneInput(e.target.value) })}
-                          className="w-full bg-transparent text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none transition-all font-body min-w-0"
-                        />
-                      </div>
-                    </div>
-                  </div>
+                  </ComponentTooltip>
+
                   <p className="text-[11px] text-on-surface-variant/70 -mt-2">Emergency contacts must be 10 digits. +91 is fixed by default.</p>
                   <motion.button
                     type="button"
@@ -5559,123 +5659,144 @@ ${currentLocationLink}
                 </div>
 
                 {/* Walk Duration Selector */}
-                <div className="space-y-4 relative z-10 pt-2 border-t border-white/5">
-                  <h3 className="font-headline font-semibold text-sm uppercase tracking-wider text-on-surface/80">Walk Duration</h3>
-                  <div className="grid grid-cols-5 gap-2 relative bg-surface-low/80 p-1.5 rounded-2xl border border-outline-variant/20">
-                    {[5, 10, 15, 30].map((min) => {
-                      const isActive = !guestData.isCustom && guestData.duration === min;
-                      return (
-                        <button
-                          key={min}
-                          onClick={() => setGuestData({ ...guestData, duration: min, isCustom: false })}
-                          className={`relative py-3 rounded-xl transition-colors duration-300 text-sm font-headline font-bold z-10 focus:outline-none ${
-                            isActive ? 'text-white' : 'text-on-surface-variant hover:text-on-surface'
-                          }`}
-                        >
-                          {isActive && (
-                            <motion.div 
-                              layoutId="duration-indicator" 
-                              className="absolute inset-0 bg-primary rounded-xl -z-10 shadow-[0_0_20px_rgba(79,70,229,0.55)] border border-primary-variant/30" 
-                              transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                            />
-                          )}
-                          {min}m
-                        </button>
-                      );
-                    })}
-                    <button 
-                      onClick={() => setGuestData({ ...guestData, isCustom: true })}
-                      className={`relative py-3 rounded-xl transition-colors duration-300 text-xs font-headline font-bold z-10 focus:outline-none ${
-                        guestData.isCustom ? 'text-white' : 'text-on-surface-variant hover:text-on-surface'
-                      }`}
-                    >
+                <ComponentTooltip
+                  title="Walk Duration"
+                  description="Sets the countdown duration before alerts are fired."
+                  side="bottom"
+                  className="w-full"
+                >
+                  <div className="space-y-4 relative z-10 pt-2 border-t border-white/5">
+                    <h3 className="font-headline font-semibold text-sm uppercase tracking-wider text-on-surface/80">Walk Duration</h3>
+                    <div className="grid grid-cols-5 gap-2 relative bg-surface-low/80 p-1.5 rounded-2xl border border-outline-variant/20">
+                      {[5, 10, 15, 30].map((min) => {
+                        const isActive = !guestData.isCustom && guestData.duration === min;
+                        return (
+                          <button
+                            key={min}
+                            onClick={() => setGuestData({ ...guestData, duration: min, isCustom: false })}
+                            className={`relative py-3 rounded-xl transition-colors duration-300 text-sm font-headline font-bold z-10 focus:outline-none ${
+                              isActive ? 'text-white' : 'text-on-surface-variant hover:text-on-surface'
+                            }`}
+                          >
+                            {isActive && (
+                              <motion.div 
+                                layoutId="duration-indicator" 
+                                className="absolute inset-0 bg-primary rounded-xl -z-10 shadow-[0_0_20px_rgba(79,70,229,0.55)] border border-primary-variant/30" 
+                                transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                              />
+                            )}
+                            {min}m
+                          </button>
+                        );
+                      })}
+                      <button 
+                        onClick={() => setGuestData({ ...guestData, isCustom: true })}
+                        className={`relative py-3 rounded-xl transition-colors duration-300 text-xs font-headline font-bold z-10 focus:outline-none ${
+                          guestData.isCustom ? 'text-white' : 'text-on-surface-variant hover:text-on-surface'
+                        }`}
+                      >
+                        {guestData.isCustom && (
+                          <motion.div 
+                            layoutId="duration-indicator" 
+                            className="absolute inset-0 bg-primary rounded-xl -z-10 shadow-[0_0_20px_rgba(79,70,229,0.55)] border border-primary-variant/30" 
+                            transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                          />
+                        )}
+                        Custom
+                      </button>
+                    </div>
+
+                    {/* Custom Time Input */}
+                    <AnimatePresence mode="wait">
                       {guestData.isCustom && (
                         <motion.div 
-                          layoutId="duration-indicator" 
-                          className="absolute inset-0 bg-primary rounded-xl -z-10 shadow-[0_0_20px_rgba(79,70,229,0.55)] border border-primary-variant/30" 
-                          transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                        />
-                      )}
-                      Custom
-                    </button>
-                  </div>
-
-                  {/* Custom Time Input */}
-                  <AnimatePresence mode="wait">
-                    {guestData.isCustom && (
-                      <motion.div 
-                        initial={{ opacity: 0, height: 0, scale: 0.95 }}
-                        animate={{ opacity: 1, height: 'auto', scale: 1 }}
-                        exit={{ opacity: 0, height: 0, scale: 0.95 }}
-                        transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }} // Custom easeOut
-                        className="overflow-hidden"
-                      >
-                        <div className="mt-3 flex items-center gap-3 p-4 bg-surface-high/30 rounded-2xl border border-outline-variant/20">
-                          <div className="flex-1 flex items-center justify-center gap-2">
-                            <div className="flex flex-col items-center">
-                              <span className="text-[10px] uppercase tracking-tighter text-on-surface-variant mb-1 font-bold">Hours</span>
-                              <input 
-                                type="number" 
-                                min="0" 
-                                max="23"
-                                value={guestData.customHours}
-                                onChange={(e) => setGuestData({ ...guestData, customHours: parseInt(e.target.value) || 0 })}
-                                className="w-12 h-10 bg-surface-low border border-outline-variant/30 rounded-lg text-center font-headline font-bold text-lg text-primary focus:ring-1 focus:ring-primary/40 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                              />
+                          initial={{ opacity: 0, height: 0, scale: 0.95 }}
+                          animate={{ opacity: 1, height: 'auto', scale: 1 }}
+                          exit={{ opacity: 0, height: 0, scale: 0.95 }}
+                          transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }} // Custom easeOut
+                          className="overflow-hidden"
+                        >
+                          <div className="mt-3 flex items-center gap-3 p-4 bg-surface-high/30 rounded-2xl border border-outline-variant/20">
+                            <div className="flex-1 flex items-center justify-center gap-2">
+                              <div className="flex flex-col items-center">
+                                <span className="text-[10px] uppercase tracking-tighter text-on-surface-variant mb-1 font-bold">Hours</span>
+                                <input 
+                                  type="number" 
+                                  min="0" 
+                                  max="23"
+                                  value={guestData.customHours}
+                                  onChange={(e) => setGuestData({ ...guestData, customHours: parseInt(e.target.value) || 0 })}
+                                  className="w-12 h-10 bg-surface-low border border-outline-variant/30 rounded-lg text-center font-headline font-bold text-lg text-primary focus:ring-1 focus:ring-primary/40 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                />
+                              </div>
+                              <span className="text-on-surface-variant font-bold text-xl mt-4">:</span>
+                              <div className="flex flex-col items-center">
+                                <span className="text-[10px] uppercase tracking-tighter text-on-surface-variant mb-1 font-bold">Minutes</span>
+                                <input 
+                                  type="number" 
+                                  min="0" 
+                                  max="59"
+                                  value={guestData.customMinutes}
+                                  onChange={(e) => setGuestData({ ...guestData, customMinutes: parseInt(e.target.value) || 0 })}
+                                  className="w-12 h-10 bg-surface-low border border-outline-variant/30 rounded-lg text-center font-headline font-bold text-lg text-primary focus:ring-1 focus:ring-primary/40 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                />
+                              </div>
                             </div>
-                            <span className="text-on-surface-variant font-bold text-xl mt-4">:</span>
-                            <div className="flex flex-col items-center">
-                              <span className="text-[10px] uppercase tracking-tighter text-on-surface-variant mb-1 font-bold">Minutes</span>
-                              <input 
-                                type="number" 
-                                min="0" 
-                                max="59"
-                                value={guestData.customMinutes}
-                                onChange={(e) => setGuestData({ ...guestData, customMinutes: parseInt(e.target.value) || 0 })}
-                                className="w-12 h-10 bg-surface-low border border-outline-variant/30 rounded-lg text-center font-headline font-bold text-lg text-primary focus:ring-1 focus:ring-primary/40 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                              />
-                            </div>
+                            <div className="h-10 w-px bg-outline-variant/20 mx-2" />
+                            <p className="flex-1 text-[10px] text-on-surface-variant leading-tight font-medium">Setting a custom duration allows for longer treks with your allies.</p>
                           </div>
-                          <div className="h-10 w-px bg-outline-variant/20 mx-2" />
-                          <p className="flex-1 text-[10px] text-on-surface-variant leading-tight font-medium">Setting a custom duration allows for longer treks with your allies.</p>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                </ComponentTooltip>
 
                 {/* PIN Creation Section */}
-                <div className="space-y-4 relative z-10 pt-2 border-t border-white/5">
-                  <div className="flex flex-col space-y-1">
-                    <h3 className="font-headline font-semibold text-sm uppercase tracking-wider text-on-surface/80">Create Your Safety PIN</h3>
-                    <p className="font-sans text-on-surface-variant text-[11px] font-medium">Only this PIN ends your walk safely. Keep it secret.</p>
+                <ComponentTooltip
+                  title="Safety PIN"
+                  description="Secret 4-digit code to end monitoring and alerts."
+                  side="bottom"
+                  className="w-full"
+                >
+                  <div className="space-y-4 relative z-10 pt-2 border-t border-white/5">
+                    <div className="flex flex-col space-y-1">
+                      <h3 className="font-headline font-semibold text-sm uppercase tracking-wider text-on-surface/80">Create Your Safety PIN</h3>
+                      <p className="font-sans text-on-surface-variant text-[11px] font-medium">Only this PIN ends your walk safely. Keep it secret.</p>
+                    </div>
+                    <div className="flex justify-between max-w-xs gap-4">
+                      {guestData.pin.map((digit, i) => (
+                        <input
+                          key={i}
+                          id={`pin-${i}`}
+                          type="password"
+                          inputMode="numeric"
+                          maxLength={1}
+                          value={digit}
+                          onChange={(e) => handleGuestPinChange(i, e.target.value)}
+                          className="w-14 h-16 bg-surface-highest border border-outline-variant/30 rounded-xl text-center text-2xl font-bold text-primary focus:ring-1 focus:ring-primary/40 focus:outline-none transition-all shadow-inner"
+                        />
+                      ))}
+                    </div>
                   </div>
-                  <div className="flex justify-between max-w-xs gap-4">
-                    {guestData.pin.map((digit, i) => (
-                      <input
-                        key={i}
-                        id={`pin-${i}`}
-                        type="password"
-                        inputMode="numeric"
-                        maxLength={1}
-                        value={digit}
-                        onChange={(e) => handleGuestPinChange(i, e.target.value)}
-                        className="w-14 h-16 bg-surface-highest border border-outline-variant/30 rounded-xl text-center text-2xl font-bold text-primary focus:ring-1 focus:ring-primary/40 focus:outline-none transition-all shadow-inner"
-                      />
-                    ))}
-                  </div>
-                </div>
+                </ComponentTooltip>
 
                 {/* Visual Context - Informational Card */}
-                <div className="bg-surface-highest/60 p-5 rounded-2xl border border-outline-variant/10 flex items-start gap-4 relative z-10">
-                  <div className="w-10 h-10 rounded-full bg-primary/10 shrink-0 flex items-center justify-center">
-                    <MapPin className="w-5 h-5 text-primary" />
+                <ComponentTooltip
+                  title="Live Ally Monitoring"
+                  description="Generates secure real-time tracking links shared with guardians."
+                  side="bottom"
+                  className="w-full"
+                >
+                  <div className="bg-surface-highest/60 p-5 rounded-2xl border border-outline-variant/10 flex items-start gap-4 relative z-10">
+                    <div className="w-10 h-10 rounded-full bg-primary/10 shrink-0 flex items-center justify-center">
+                      <MapPin className="w-5 h-5 text-primary" />
+                    </div>
+                    <div>
+                      <h4 className="font-headline font-bold text-sm text-on-surface">Live Ally Monitoring</h4>
+                      <p className="font-body text-xs text-on-surface-variant mt-1 leading-relaxed">Your selected contacts will receive a live tracking link once you begin. They'll be alerted if the timer expires without your PIN.</p>
+                    </div>
                   </div>
-                  <div>
-                    <h4 className="font-headline font-bold text-sm text-on-surface">Live Ally Monitoring</h4>
-                    <p className="font-body text-xs text-on-surface-variant mt-1 leading-relaxed">Your selected contacts will receive a live tracking link once you begin. They'll be alerted if the timer expires without your PIN.</p>
-                  </div>
-                </div>
+                </ComponentTooltip>
 
                 {/* Start Action */}
                 <div className="pt-6 mt-6 border-t border-white/5 relative z-10">

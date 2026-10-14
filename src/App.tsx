@@ -342,17 +342,28 @@ export default function App() {
     }
 
     try {
-      const response = await fetch('/api/fire-alert', {
+      const isOverdue = alertTriggerReason === 'Walk timer and 30-second grace period expired';
+      const response = await fetch(isOverdue ? '/api/notify-walk-event' : '/api/fire-alert', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          walkId,
-          userId: profileData.userId || 'guest',
-          contact1: activeContacts.contact1,
-          contact2: activeContacts.contact2,
-          userName: activeContacts.name || guestData.name,
-          lastLocation: lastGpsCoords
-        })
+        body: JSON.stringify(isOverdue
+          ? {
+              eventType: 'overdue',
+              walkId,
+              contact1: activeContacts.contact1,
+              contact2: activeContacts.contact2,
+              userName: activeContacts.name || guestData.name || profileData.fullName,
+              location: lastGpsCoords,
+            }
+          : {
+              walkId,
+              userId: profileData.userId || 'guest',
+              contact1: activeContacts.contact1,
+              contact2: activeContacts.contact2,
+              userName: activeContacts.name || guestData.name,
+              lastLocation: lastGpsCoords,
+              reason: alertTriggerReason,
+            })
       });
 
       const result = await response.json();
@@ -363,6 +374,36 @@ export default function App() {
       }
     } catch (error) {
       console.error('❌ Error sending alert notifications:', error);
+    }
+  };
+
+  const sendWalkEventNotification = async (eventType: 'safe-arrival' | 'triple-tap' | 'overdue') => {
+    if (!walkId || !activeContacts.contact1 || !lastGpsCoords) {
+      console.error(`Cannot send ${eventType} notification: walk, contact, or GPS data is missing.`);
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/notify-walk-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          eventType,
+          walkId,
+          contact1: activeContacts.contact1,
+          contact2: activeContacts.contact2,
+          userName: activeContacts.name || guestData.name || profileData.fullName,
+          location: lastGpsCoords,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        console.error(`${eventType} WhatsApp notification failed:`, result);
+      } else {
+        console.log(`✅ ${eventType} WhatsApp notification sent:`, result.results);
+      }
+    } catch (error) {
+      console.error(`${eventType} WhatsApp notification failed:`, error);
     }
   };
 
@@ -395,6 +436,7 @@ export default function App() {
         setBufferTime((prev) => prev - 1);
       }, 1000);
     } else if (isBufferActive && bufferTime === 0 && !isAlertActive) {
+      setAlertTriggerReason('Walk timer and 30-second grace period expired');
       setIsAlertActive(true);
       setCurrentScreen('alert-sent');
     }
@@ -467,6 +509,7 @@ export default function App() {
           setToastMessage('Walk cancelled safely.');
           setShowToast(true);
           setTimeout(() => setShowToast(false), 3000);
+          void sendWalkEventNotification('safe-arrival');
           // Release WakeLock is handled by useEffect on currentScreen change
         } else {
           // Wrong PIN
@@ -500,6 +543,7 @@ export default function App() {
 
           const finalStepCount = stepCountRef.current;
           completeWalkTransition(finalStepCount);
+          void sendWalkEventNotification('safe-arrival');
           setPinAttempt([]);
           setPinError(false);
           setPinTimeout(60);
@@ -563,6 +607,7 @@ export default function App() {
 
           const finalStepCount = stepCountRef.current;
           completeWalkTransition(finalStepCount);
+          void sendWalkEventNotification('safe-arrival');
           setShowAlertCancelModal(false);
           setAlertCancelPinAttempt('');
           setAlertCancelPinSuccess(false);
@@ -861,6 +906,7 @@ export default function App() {
 
   useEffect(() => {
     if (tapCount === 3) {
+      void sendWalkEventNotification('triple-tap');
       setCurrentScreen('fake-call');
       setTapCount(0);
     }
@@ -919,6 +965,7 @@ export default function App() {
         // Success
         setIsPinModalOpen(false);
         completeWalkTransition(stepCountRef.current);
+        void sendWalkEventNotification('safe-arrival');
         setConfirmationPin(['', '', '', '']);
         setPinTimeout(60);
       } else {
@@ -940,9 +987,36 @@ export default function App() {
     const newWalkId = Math.random().toString(36).substring(2, 11);
     
     try {
-      const validContacts = filterValidContacts(guestData.contact1, guestData.contact2);
-      setActiveContacts({ name: guestData.name, ...validContacts });
+      const walkUserName = guestData.name || profileData.fullName || 'Saahas user';
+      const validContacts = filterValidContacts(
+        guestData.contact1 || profileData.contact1Phone,
+        guestData.contact2 || profileData.contact2Phone,
+      );
+      setActiveContacts({ name: walkUserName, ...validContacts });
       console.log('Sending alert to contacts:', validContacts);
+
+      if (!validContacts.contact1) {
+        throw new Error('A valid primary emergency contact is required.');
+      }
+
+      const initialPosition = await new Promise<GeolocationPosition>((resolve, reject) => {
+        if (!('geolocation' in navigator)) {
+          reject(new Error('Location is not supported on this device.'));
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 10000,
+        });
+      });
+      const startingLocation = {
+        lat: initialPosition.coords.latitude,
+        lng: initialPosition.coords.longitude,
+      };
+      setLastGpsCoords(startingLocation);
+      setGpsStatus('live');
+      setLastLocationUpdate(0);
 
       await initDB();
 
@@ -1006,11 +1080,36 @@ export default function App() {
             walkId: newWalkId,
             userId: profileData.userId || guestData.name,
             startTime: new Date().toISOString(),
-            duration: durationMinutes
+            duration: durationMinutes,
+            lastLocation: startingLocation,
           })
         });
       } catch (error) {
         console.log('⏳ Offline - will sync walk when online');
+      }
+
+      // Notify emergency contacts once, using the GPS fix captured at walk start.
+      try {
+        const notificationResponse = await fetch('/api/notify-walk-start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            walkId: newWalkId,
+            contact1: validContacts.contact1,
+            contact2: validContacts.contact2,
+            userName: walkUserName,
+            durationMinutes,
+            location: startingLocation,
+          }),
+        });
+        const notificationResult = await notificationResponse.json();
+        if (!notificationResponse.ok || !notificationResult.success) {
+          console.error('Walk-start WhatsApp notification failed:', notificationResult);
+        } else {
+          console.log('✅ Walk-start WhatsApp notification sent:', notificationResult.results);
+        }
+      } catch (error) {
+        console.error('Walk started, but the WhatsApp start notification could not be sent:', error);
       }
 
       // Update UI

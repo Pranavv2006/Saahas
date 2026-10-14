@@ -11,8 +11,11 @@ if ('serviceWorker' in navigator) {
     console.log('✅ Service Worker registered:', registration);
     
     // Request Periodic Background Sync permission
-    if ('periodicSync' in registration) {
-      registration.periodicSync.register('sync-gps', {
+    const periodicSync = (registration as ServiceWorkerRegistration & {
+      periodicSync?: { register: (tag: string, options: { minInterval: number }) => Promise<void> };
+    }).periodicSync;
+    if (periodicSync) {
+      periodicSync.register('sync-gps', {
         minInterval: 60 * 1000 // 60 seconds
       }).then(() => {
         console.log('🔄 Periodic GPS sync registered');
